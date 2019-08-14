@@ -103,7 +103,7 @@ ULONG LoggingFlags = 0; // all disabled by default
     BOOLEAN GetNameByUnicodeString(PUNICODE_STRING pSrc, WCHAR name[]);
     NTSTATUS DriverEntry(__in PDRIVER_OBJECT DriverObject, __in PUNICODE_STRING RegistryPath);
     NTSTATUS FilterUnload(__in FLT_FILTER_UNLOAD_FLAGS Flags);
-    BOOLEAN GetProcessNameByObj(PEPROCESS ProcessObj, WCHAR name[]);
+    BOOLEAN GetNameByObj(PEPROCESS ProcessObj, WCHAR name[]);
 
     BOOLEAN GetCommandLine(PEPROCESS ProcessObj, WCHAR name[]);
 

