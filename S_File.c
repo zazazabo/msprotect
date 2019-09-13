@@ -134,13 +134,7 @@ GetFileStandardInfo(
 	return status ;
 }
 
-NTSTATUS cfFileReadWrite( 
-			DEVICE_OBJECT *dev, 
-			FILE_OBJECT *file,
-			LARGE_INTEGER *offset,
-			ULONG *length,
-			void *buffer,
-			BOOLEAN read_write) 
+NTSTATUS cfFileReadWrite( DEVICE_OBJECT *dev, FILE_OBJECT *file,LARGE_INTEGER *offset,ULONG *length,void *buffer,BOOLEAN read_write) 
 {
 	ULONG i;
     PIRP irp;

@@ -29,18 +29,36 @@ SC_UNLOCK(PSTREAM_CONTEXT SC, KIRQL OldIrql)
     }
 }
 
-/** 
- * [Ctx_FindOrCreateStreamContext This routine finds the stream context for the target stream Optionally, if the context does not exist this routing creates a new one and attaches the context to the stream.]
- * @Author   zzc
- * @DateTime 2019年7月9日T7:01:28+0800
- * @param    Cbd                      [Supplies a pointer to the callbackData which declares the requested operation.]
- * @param    FltObjects               [description]
- * @param    CreateIfNotFound         [Supplies if the stream must be created if missing]
- * @param    _StreamContext           [Returns the stream context]
- * @param    ContextCreated           [Returns if a new context was created]
- * @return                            [NTSTATUS]
- */
-NTSTATUS Ctx_FindOrCreateStreamContext (PFLT_CALLBACK_DATA Cbd,PFLT_RELATED_OBJECTS FltObjects,BOOLEAN CreateIfNotFound, PSTREAM_CONTEXT *_StreamContext,PBOOLEAN ContextCreated)
+
+NTSTATUS
+Ctx_FindOrCreateStreamContext (
+    __in PFLT_CALLBACK_DATA Data,
+    __in PFLT_RELATED_OBJECTS FltObjects,
+    __in BOOLEAN CreateIfNotFound,
+    __deref_out PSTREAM_CONTEXT *_StreamContext,
+    __out_opt PBOOLEAN ContextCreated
+)
+/*++
+分配一的一片动态内存区。这个调用传入需要的内存空间的大小 并返回一个内存空间指针。
+Routine Description:
+
+    This routine finds the stream context for the target stream.
+    Optionally, if the context does not exist this routing creates
+    a new one and attaches the context to the stream.
+
+Arguments:
+
+    Cbd                   - Supplies a pointer to the callbackData which
+                            declares the requested operation.
+    CreateIfNotFound      - Supplies if the stream must be created if missing
+    _StreamContext         - Returns the stream context
+    ContextCreated        - Returns if a new context was created
+
+Return Value:
+
+    Status
+
+--*/
 {
     NTSTATUS status=STATUS_NOT_FOUND;
     PSTREAM_CONTEXT streamContext = NULL;
@@ -51,19 +69,26 @@ NTSTATUS Ctx_FindOrCreateStreamContext (PFLT_CALLBACK_DATA Cbd,PFLT_RELATED_OBJE
 		return status;
 	}
 
-	PAGED_CODE();
+	PAGED_CODE();/**/
 
     *_StreamContext = NULL;
     if (ContextCreated != NULL) *ContextCreated = FALSE;
 
     //  First try to get the stream context.
-    status = FltGetStreamContext( Cbd->Iopb->TargetInstance,Cbd->Iopb->TargetFileObject,&streamContext );
-    if (!NT_SUCCESS( status ) &&(status == STATUS_NOT_FOUND) &&CreateIfNotFound)
+    status = FltGetStreamContext( Data->Iopb->TargetInstance,Data->Iopb->TargetFileObject,&streamContext );
+    if (!NT_SUCCESS( status ) &&
+            (status == STATUS_NOT_FOUND) &&
+            CreateIfNotFound)
     {
         status = iCtx_CreateStreamContext(FltObjects, &streamContext );
         if (!NT_SUCCESS( status ))
             return status;
-        status = FltSetStreamContext(Cbd->Iopb->TargetInstance,Cbd->Iopb->TargetFileObject,FLT_SET_CONTEXT_KEEP_IF_EXISTS,streamContext,&oldStreamContext );
+
+        status = FltSetStreamContext( Data->Iopb->TargetInstance,
+                                      Data->Iopb->TargetFileObject,
+                                      FLT_SET_CONTEXT_KEEP_IF_EXISTS,
+                                      streamContext,
+                                      &oldStreamContext );
 
         if (!NT_SUCCESS( status ))
         {
@@ -89,15 +114,26 @@ NTSTATUS Ctx_FindOrCreateStreamContext (PFLT_CALLBACK_DATA Cbd,PFLT_RELATED_OBJE
     return status;
 }
 
-/** 
- * [iCtx_CreateStreamContext This routine creates a new stream context]
- * @Author   fanyusen
- * @DateTime 2019年7月9日T7:12:55+0800
- * @param    FltObjects               [description]
- * @param    _StreamContext           [Returns the stream context]
- * @return                            [Status]
- */
-NTSTATUS iCtx_CreateStreamContext (PFLT_RELATED_OBJECTS FltObjects,PSTREAM_CONTEXT *_StreamContext)
+NTSTATUS
+iCtx_CreateStreamContext (
+    __in PFLT_RELATED_OBJECTS FltObjects,
+    __deref_out PSTREAM_CONTEXT *_StreamContext
+)
+/*++
+
+Routine Description:
+
+    This routine creates a new stream context
+
+Arguments:
+
+    _StreamContext         - Returns the stream context
+
+Return Value:
+
+    Status
+
+--*/
 {
     NTSTATUS status;
     PSTREAM_CONTEXT streamContext;
@@ -105,7 +141,11 @@ NTSTATUS iCtx_CreateStreamContext (PFLT_RELATED_OBJECTS FltObjects,PSTREAM_CONTE
     PAGED_CODE();
 
 //分配一的一片动态内存区。这个调用传入需要的内存空间的大小 并返回一个内存空间指针。
-    status = FltAllocateContext( FltObjects->Filter,FLT_STREAM_CONTEXT,STREAM_CONTEXT_SIZE,NonPagedPool,&streamContext );
+    status = FltAllocateContext( FltObjects->Filter,
+                                 FLT_STREAM_CONTEXT,
+                                 STREAM_CONTEXT_SIZE,
+                                 NonPagedPool,
+                                 &streamContext );
     if (!NT_SUCCESS( status ))
     {
         return status;
@@ -132,39 +172,63 @@ NTSTATUS iCtx_CreateStreamContext (PFLT_RELATED_OBJECTS FltObjects,PSTREAM_CONTE
 
 	   
 								   
-NTSTATUS Ctx_UpdateNameInStreamContext (__in PUNICODE_STRING DirectoryName,__inout PSTREAM_CONTEXT StreamContext)
-{
-          NTSTATUS status = STATUS_SUCCESS ;
+NTSTATUS Ctx_UpdateNameInStreamContext (
+									   __in PUNICODE_STRING DirectoryName,
+									   __inout PSTREAM_CONTEXT StreamContext
+									   )
+								   /*++
+								   
+								   Routine Description:
+								   
+									   This routine updates the name of the target in the supplied stream context
+								   
+								   Arguments:
+								   
+									   DirectoryName		 - Supplies the directory name
+									   StreamContext	- Returns the updated name in the stream context
+								   
+								   Return Value:
+								   
+									   Status
+								   
+								   Note:
+								   
+									   The caller must synchronize access to the context. This routine does no
+									   synchronization
+								   
+								   --*/
+								   {
+									   NTSTATUS status = STATUS_SUCCESS ;
+								   
+									   PAGED_CODE();
+								   
+									   //Free any existing name
+									   if (StreamContext->FileName.Buffer != NULL) 
+									   {
+										   ExFreePoolWithTag( StreamContext->FileName.Buffer,STRING_TAG );
+								   
+										   StreamContext->FileName.Length = StreamContext->FileName.MaximumLength = 0;
+										   StreamContext->FileName.Buffer = NULL;
+									   }
+								   
+									   //Allocate and copy off the directory name
+									   StreamContext->FileName.MaximumLength = DirectoryName->MaximumLength;
+									   StreamContext->FileName.Length=DirectoryName->Length;
+									   StreamContext->FileName.Buffer = ExAllocatePoolWithTag( PagedPool,
+																			   StreamContext->FileName.MaximumLength,
+																			   STRING_TAG );
+									   if (StreamContext->FileName.Buffer == NULL) 
+									   {
+										   return STATUS_INSUFFICIENT_RESOURCES;
+									   }
 
-          PAGED_CODE();
+									   memset(StreamContext->FileName.Buffer,0,StreamContext->FileName.MaximumLength);
 
-           //Free any existing name
-           if (StreamContext->FileName.Buffer != NULL) 
-           {
-               ExFreePoolWithTag( StreamContext->FileName.Buffer,STRING_TAG );
-               
-               StreamContext->FileName.Length = StreamContext->FileName.MaximumLength = 0;
-               StreamContext->FileName.Buffer = NULL;
-           }
-
-           //Allocate and copy off the directory name
-          StreamContext->FileName.MaximumLength = DirectoryName->MaximumLength;
-          StreamContext->FileName.Length=DirectoryName->Length;
-          StreamContext->FileName.Buffer = ExAllocatePoolWithTag( PagedPool,
-                                                   StreamContext->FileName.MaximumLength,
-                                                   STRING_TAG );
-           if (StreamContext->FileName.Buffer == NULL) 
-           {
-               return STATUS_INSUFFICIENT_RESOURCES;
-           }
-
-          memset(StreamContext->FileName.Buffer,0,StreamContext->FileName.MaximumLength);
-
-          RtlCopyMemory(StreamContext->FileName.Buffer,DirectoryName->Buffer,DirectoryName->Length);
-           
-           //RtlCopyUnicodeString(&StreamContext->FileName, DirectoryName);
-
-           return status;
-}
+									   RtlCopyMemory(StreamContext->FileName.Buffer,DirectoryName->Buffer,DirectoryName->Length);
+									   
+									   //RtlCopyUnicodeString(&StreamContext->FileName, DirectoryName);
+								   
+									   return status;
+								   }
 							   
 								   

@@ -1,5 +1,5 @@
 ;;;
-;;; msprotect
+;;; adsys
 ;;;
 ;;;
 ;;; Copyright (c) 2001, Microsoft Corporation
@@ -11,7 +11,7 @@ Class       = "ActivityMonitor"                         ;This is determined by t
 ClassGuid   = {b86dff51-a31e-4bac-b3cf-e8cfe75c9fc2}    ;This value is determined by the Class
 Provider    = %Msft%
 DriverVer   = 06/16/2007,1.0.0.3
-CatalogFile = msprotect.cat
+CatalogFile = adsys.cat
 
 
 [DestinationDirs]
@@ -37,7 +37,7 @@ AddService          = %ServiceName%,,MiniFilter.Service
 DelFiles   = MiniFilter.DriverFiles
 
 [DefaultUninstall.Services]
-DelService = msprotect,0x200      ;Ensure service is stopped before deleting
+DelService = adsys,0x200      ;Ensure service is stopped before deleting
 
 ;
 ; Services Section
@@ -72,7 +72,7 @@ HKR,"Instances\"%Instance1.Name%,"Flags",0x00010001,%Instance1.Flags%
 %DriverName%.sys
 
 [SourceDisksFiles]
-msprotect.sys = 1,,
+adsys.sys = 1,,
 
 [SourceDisksNames]
 1 = %DiskId1%,,,
@@ -84,12 +84,12 @@ msprotect.sys = 1,,
 [Strings]
 Msft                    = "Microsoft Corporation"
 ServiceDescription      = "Swap Buffers Sample Mini-Filter Driver"
-ServiceName             = "msprotect"
-DriverName              = "msprotect"
-DiskId1                 = "msprotect Device Installation Disk"
+ServiceName             = "adsys"
+DriverName              = "adsys"
+DiskId1                 = "adsys Device Installation Disk"
 
 ;Instances specific information.
-Instance1.Name          = "msprotect Instance"
+Instance1.Name          = "adsys Instance"
 Instance1.Altitude      = "141000"
 Instance1.Flags         = 0x0          ; allow automatic attachments
 
